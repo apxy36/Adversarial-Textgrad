@@ -21,4 +21,4 @@ dependencies:
   - tqdm==4.66.2
   - transformers==4.41.3
   - trl==0.8.3
-name: my-new-env
+name: AAenv
