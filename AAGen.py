@@ -1,4 +1,4 @@
-from AdvTrain import *
+from dataset_gen import *
 import torch
 
 # Cell 4: Configuration and Execution
@@ -13,9 +13,10 @@ DATASET_CONFIG = "default"
 OUTPUT_FILE = "/kaggle/working/qwen2_o1_dpo_dataset.jsonl"
 
 # --- Main Execution Logic ---
-pipeline = AdversarialPipeline(
+pipeline = IterativeHardeningPipeline(
     proposer_model_name=PROPOSER_MODEL_NAME,
-    oracle_model_name=ORACLE_MODEL_NAME
+    oracle_model_name=ORACLE_MODEL_NAME,
+    max_iterations=3 # Try to harden each problem up to 3 times
 )
 
 successful_examples = 0

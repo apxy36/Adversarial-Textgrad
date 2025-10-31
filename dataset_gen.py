@@ -1,9 +1,4 @@
-# Cell 3: AIME-Adapted Pipeline Code
 
-# --- NEW: AIME-Specific Verification Function ---
-import re
-
-# Cell 2: Imports and Authentication
 import os
 import re
 import json
@@ -14,9 +9,10 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 import torch
 from datasets import load_dataset
 import textgrad as tg
-from kaggle_secrets import UserSecretsClient
+import textgrad.engine as tge
+from textgrad.engine.openai import ChatOpenAI
+# from kaggle_secrets import UserSecretsClient
 import huggingface_hub
-
 import re
 
 def extract_aime_answer_from_solution_v2(solution_text: str) -> str | None:
@@ -231,109 +227,291 @@ class TextGradCorrector:
             print(f"TextGrad correction step failed: {e}")
             return None
 
-# --- NEW: Distractor Optimization Class ---
-class DistractorOptimizer:
+class AdversarialProblemOptimizer:
     """
-    Uses TextGrad to refine a distractor within a problem to make it more challenging
-    for a target LLM, without changing the problem's ground-truth answer.
+    A generalized framework to increase the difficulty of a given problem
+    by applying a dynamically selected, TextGrad-powered adversarial strategy.
     """
     def __init__(self, oracle_model: str):
-        logging.info(f"Initializing TextGrad Distractor Optimizer with oracle: {oracle_model}")
-        # The oracle model is used for both critiquing and rewriting
-        tg.set_backward_engine(oracle_model, override=True)
-        self.optimizer_engine = tg.get_engine(oracle_model)
-
-    def optimize(self, core_question: str, original_distractor: str, correct_answer: str, successful_reasoning_trace: str) -> str:
         """
-        Performs one step of distractor optimization.
-
-        Args:
-            core_question (str): The part of the prompt that is immutable.
-            original_distractor (str): The text to be optimized.
-            correct_answer (str): The ground-truth answer.
-            successful_reasoning_trace (str): The model's successful CoT.
+        Initializes the optimizer with a powerful oracle model and registers
+        the available adversarial strategies.
+        """
+        self.oracle_model_llm = ChatOpenAI(model_string=oracle_model, is_multimodal=tge._check_if_multimodal(oracle_model))
+        tg.set_backward_engine(self.oracle_model_llm, override=True)
         
-        Returns:
-            A new, hopefully more challenging, distractor.
-        """
-        # 1. The distractor is the variable we want to change.
-        distractor_variable = tg.Variable(
-            original_distractor,
-            requires_grad=True,
-            role_description="A piece of distracting, irrelevant information embedded in a math problem."
+        # Initialize the meta-agent for strategy selection
+        self.selector = OpenAIAgent(
+            oracle_model,
+            "You are a red team strategist. Your job is to analyze how a model solved a problem and choose the best strategy from a list to create a new, harder problem that will make it fail."
         )
+        
+        # Initialize the TextGrad engines
+        # tg.set_backward_engine(oracle_model, override=True)
+        self.optimizer_engine = ChatOpenAI(model_string=oracle_model, is_multimodal=tge._check_if_multimodal(oracle_model))
+        
+        # --- The Core of the General Framework: The Strategy Registry ---
+        self.strategies = {}
+        self._register_strategies()
 
-        # 2. The "Reverse" Loss Function: Critique the model's SUCCESS.
-        # The goal is to generate a gradient that explains WHY the distractor failed to mislead.
-        loss_instruction = (
-            "The following is a math problem, a model's correct reasoning, and the specific distractor text it was given. "
+    def _register_strategies(self):
+        """
+        Defines and registers the available adversarial strategies.
+        Each strategy is a dictionary defining its TextGrad recipe.
+        This is where you would add new failure modes.
+        """
+        
+        # STRATEGY 1: ADVERSARIAL REFRAMING
+        self.strategies["Adversarial Reframing"] = {
+            "description": "Rewrite the problem's narrative to resemble a famous, complex paradox to trick the model into overthinking.",
+            "variable_extractor": lambda p: p.get('framing'),
+            "loss_instruction_template": (
+                "A model correctly solved a problem by ignoring its simple framing. "
+                "Critique this framing. Explain why it was too direct. Suggest how to rewrite it to mimic a more complex problem type (like a probability puzzle) "
+                "to trick a pattern-matching model into applying an incorrect, complex algorithm. Rationale: '{rationale}'"
+                "\n\n--- UNCHANGING PART OF PROBLEM ---\n{context}"
+            ),
+            "reconstructor": lambda p, new_var: f"{new_var} {p.get('core_facts', '')} {p['question']}"
+        }
+        
+        # STRATEGY 2: SPURIOUS FEATURE AMPLIFICATION
+        self.strategies["Spurious Feature Amplification"] = {
+            "description": "Amplify the language of an irrelevant feature in structured data to make it sound more important and causally linked to the answer.",
+            "variable_extractor": lambda p: p.get('spurious_feature_text'),
+            "loss_instruction_template": (
+                "A model correctly ignored a spurious feature in a structured problem. "
+                "Critique this feature's text. Rewrite it to use more scientific or causal-sounding language to make it a more tempting feature to use. Rationale: '{rationale}'"
+                "\n\n--- FULL PROBLEM CONTEXT ---\n{context}"
+            ),
+            "reconstructor": lambda p, new_var: p['full_problem_text'].replace(p['spurious_feature_text'], new_var)
+        }
+        
+        # STRATEGY 3: REDUNDANT CONSTRAINT INJECTION
+        self.strategies["Redundant Constraint Injection"] = {
+            "description": "Add a new, confusingly-worded but logically superfluous clue to a logic puzzle to increase cognitive load.",
+            "variable_extractor": lambda p: "[PLACEHOLDER_FOR_A_NEW_CONFUSING_CLUE]",
+            "loss_instruction_template": (
+                "A model solved this logic puzzle efficiently. Your task is to generate a new clue. "
+                "This clue MUST NOT add new information but should be logically redundant with the existing clues, forcing the model to re-verify its work. "
+                "Make it complexly worded. Rationale: '{rationale}'"
+                "\n\n--- EXISTING CLUES ---\n{context}"
+            ),
+            "reconstructor": lambda p, new_var: f"{p['full_problem_text']}\n- New Clue: {new_var}"
+        }
+
+        self.strategies["Distractor"] = {
+            "description": "Add a new, confusingly-worded but logically superfluous clue to a logic puzzle to increase cognitive load.",
+            "variable_extractor": lambda p: "[PLACEHOLDER_FOR_A_NEW_CONFUSING_CLUE]",
+            "loss_instruction_template": (
+                "The following is a math problem, a model's correct reasoning, and the specific distractor text it was given. "
             "The model successfully ignored the distractor. Your task is to critique the *distractor text*. "
             "Explain why it was not confusing enough and suggest how it could be made more salient or thematically integrated to trick the model into using it. "
             "Be very specific in your feedback on the distractor."
-            f"\n\n--- CORE QUESTION ---\n{core_question}\nAnswer should be {correct_answer}."
-            f"\n\n--- MODEL'S CORRECT REASONING ---\n{successful_reasoning_trace}"
+            "\n\n--- MATH PROBLEM ---\n{problem}\nAnswer should be {correct_answer}."
+            "\n\n--- MODEL'S CORRECT REASONING ---\n{successful_trace}"
+            ),
+            "reconstructor": lambda p, new_var: f"{p['full_problem_text']}\n- New Clue: {new_var}"
+        }
+        
+        print(f"Initialized with {len(self.strategies)} adversarial strategies.")
+
+    def harden_problem(self, problem, successful_trace, distractor, correct_answer):
+        """
+        Orchestrates the full hardening process for a single problem.
+
+        Args:
+            problem (dict): The problem dictionary, which must contain the necessary keys
+                            for the chosen strategy (e.g., 'framing', 'question').
+            successful_trace (str): The Proposer's correct reasoning trace.
+
+        Returns:
+            A string of the new, hardened problem, or None if the process fails.
+        """
+        # --- 1. Meta-Cognitive Strategy Selection ---
+        # strategy_descriptions = "\n".join([f"- **{name}**: {config['description']}" for name, config in self.strategies.items()])
+        # selector_prompt = (
+        #     f"A student model correctly solved this problem:\n---PROBLEM---\n{problem['question']}\n\n"
+        #     f"Here was its reasoning:\n---REASONING---\n{successful_trace}\n\n"
+        #     "Based on the problem structure and the model's reasoning, which of the following strategies is most likely to create a new version of this problem that stumps the model?\n"
+        #     f"{strategy_descriptions}\n\n"
+        #     "Respond in JSON format: {\"strategy\": \"Chosen Strategy Name\", \"rationale\": \"Your brief rationale for this choice...\"}"
+        # )
+        
+        # response_str = self.selector.invoke(selector_prompt, temperature=0.2)
+        # try:
+        #     choice = json.loads(response_str)
+        #     strategy_name = choice['strategy']
+        #     rationale = choice.get('rationale', '')
+        #     if strategy_name not in self.strategies:
+        #         raise ValueError("Selector chose an unknown strategy.")
+        # except (json.JSONDecodeError, TypeError, ValueError) as e:
+        #     print(f"Selector failed to choose a valid strategy: {e}")
+        #     return None
+        
+        # print(f"AACE selected strategy: {strategy_name}")
+
+        strategy_name = "Distractor"
+
+        # --- 2. Execute the Chosen TextGrad Strategy ---
+        strategy_config = self.strategies[strategy_name]
+        
+        # Extract the part of the problem to be optimized
+        # original_variable_text = strategy_config["variable_extractor"](problem)
+        # if original_variable_text is None:
+        #     print(f"Strategy '{strategy_name}' is not applicable to this problem (variable not found).")
+        #     return None
+
+        # Create the TextGrad Variable and Loss Function
+        print("Distractor: ", distractor)
+        distractor = distractor
+        variable = tg.Variable(distractor, requires_grad=True, role_description="A part of a problem to be adversarially rewritten.")
+        context = problem.get('full_problem_text', problem['question'])
+        loss_instruction = strategy_config["loss_instruction_template"].format(problem=problem, correct_answer = correct_answer, 
+                                                                              successful_trace = successful_trace)
+        # .format(rationale=rationale, context=context)
+        print("Loss: ", loss_instruction)
+        loss_fn = tg.TextLoss(loss_instruction)
+        optimizer = tg.TGD(parameters=[variable], engine=self.optimizer_engine)
+
+        # try:
+        # Run the TextGrad cycle
+        loss = loss_fn(variable)
+        print(f"TextGrad Critique (Gradient) for f{strategy_name}: {loss.value}")
+        loss.backward()
+        optimizer.step()
+        
+        new_variable_text = variable.value
+        
+        # Reconstruct the full problem with the optimized part
+        hardened_problem_text = strategy_config["reconstructor"](problem, new_variable_text)
+        
+        return [hardened_problem_text, variable.value]
+
+def new_generate_from_single_prompt(
+        self,
+        prompt: str,
+        system_prompt: str = None,
+        temperature=1,
+        max_tokens=2000,
+        top_p=0.99,
+    ):
+        sys_prompt_arg = system_prompt if system_prompt else self.system_prompt
+
+        cache_or_none = self._check_cache(sys_prompt_arg + prompt)
+        if cache_or_none is not None:
+            return cache_or_none
+
+        response = self.client.chat.completions.create(
+            model=self.model_string,
+            messages=[
+                {"role": "system", "content": sys_prompt_arg},
+                {"role": "user", "content": prompt},
+            ],
+            frequency_penalty=0,
+            presence_penalty=0,
+            stop=None,
+            temperature=temperature,
+            # max_tokens=max_tokens,
+            # top_p=top_p,
         )
-        loss_fn = tg.TextLoss(instruction=loss_instruction)
-        
-        # 3. Define the optimizer
-        optimizer = tg.TGD(parameters=[distractor_variable], engine=self.optimizer_engine)
 
-        try:
-            # 4. Run the optimization cycle
-            loss = loss_fn(distractor_variable) # This calls the backward engine to generate the critique
-            logging.info(f"TextGrad Distractor Critique (Gradient): {loss.value}")
-            loss.backward() # Propagate the critique to the variable's .grad
-            optimizer.step() # Rewrite the distractor based on the critique
-            
-            return distractor_variable.value
-        except Exception as e:
-            logging.error(f"TextGrad distractor optimization failed: {e}")
-            return original_distractor # Return original on failure
+        response = response.choices[0].message.content
+        self._save_cache(sys_prompt_arg + prompt, response)
+        return response
 
-# --- The Main Pipeline Class (logic is the same, but uses new agents/verification) ---
-max_distractor_optim_steps = 3
-class AdversarialPipeline:
-    def __init__(self, proposer_model_name: str, oracle_model_name: str):
+ChatOpenAI._generate_from_single_prompt = new_generate_from_single_prompt
+
+class IterativeHardeningPipeline:
+    def __init__(self, proposer_model_name: str, oracle_model_name: str, max_iterations: int = 3):
         self.proposer = HuggingFaceAgent(proposer_model_name)
-        self.corrector = TextGradCorrector(oracle_model=oracle_model_name)
-        self.distractor_optimizer = DistractorOptimizer(oracle_model=oracle_model_name)
-        self.referee = OpenAIAgent(oracle_model_name, "You are an objective expert. Provide a correct, step-by-step solution. Your final answer must be correct and clearly stated.")
-        self.validator = OpenAIAgent(oracle_model_name, "You are a validation expert. Your task is to check if a math problem is logical and well-formed. Respond with 'VALID' or 'INVALID' and a brief explanation.")
-        self.max_optim_steps = max_distractor_optim_steps
-        
-        
+        self.optimizer = AdversarialProblemOptimizer(oracle_model=oracle_model_name)
+        self.validator = OpenAIAgent(oracle_model_name, "You are a validation expert. Check if a math problem is logically coherent and has one unambiguous answer. Respond with 'VALID' or 'INVALID' and a brief explanation.")
+        self.max_iterations = max_iterations
+        self.distractor_proposer = OpenAIAgent(oracle_model_name, "You are a math expert. Add a new, confusingly-worded but logically superfluous clue to a math problem to increase cognitive load, without changing the final answer.")
 
-    def generate_single_example(self, original_problem: dict):
-        question = original_problem['problem'] # Dataset key is 'problem'
-        # --- MODIFIED: AIME solution is a full trace, not just a number ---
-        ground_truth_solution = original_problem['solution'] 
-
+    def process_problem(self, seed_problem: dict):
+        # Adapt seed problem structure for our optimizer (example for GSM8k)
+        ground_truth_solution = seed_problem['solution'] 
+        problem = {
+            'framing': "", # GSM8k has no separate framing
+            'core_facts': seed_problem['problem'],
+            'question': "", # The question is part of the core_facts
+            'answer': int(extract_aime_answer_from_solution_v2(ground_truth_solution)),
+            'full_problem_text': seed_problem['problem']
+        }
         
-        
-        # We need the final integer answer for verification.
-        # We'll get it from the ground truth solution trace using our verifier.
-        correct_answer_str = str(int(extract_aime_answer_from_solution_v2(ground_truth_solution)))
-        print(question, ground_truth_solution, correct_answer_str)
-        initial_solution = self.proposer.solve(question)
-        if not initial_solution: return None
-        print(initial_solution)
-        # --- MODIFIED: Use the new verification function ---
-        if verify_aime_answer(initial_solution, correct_answer_str):
-            print("SKIPPING")
-            print("Proposer solved AIME problem correctly. Skipping.")
+        if not problem['answer']:
+            print("Could not extract ground truth answer from seed problem. Skipping.")
             return None
 
-        print(f"Proposer failed. Initial Solution:\n---\n{initial_solution}\n---")
+        current_prompt = problem['full_problem_text']
+        reasoning_traces = [] # To collect the traces at each difficulty level
+        distractor = ""
+        answers = []
+        problems= [current_prompt]
         
-        y_chosen = self.corrector.correct(question, initial_solution)
-        y_rejected = initial_solution
-        print(y_chosen, y_rejected)
-        if not y_chosen: return None
-        
-        # Validate that the new corrected solution is correct.
-        if verify_aime_answer(y_chosen, correct_answer_str):
-            print(f"Successfully generated corrected preference pair for AIME problem.")
-            return {"prompt": question, "chosen": y_chosen, "rejected": y_rejected}
-        else:
-            logging.warning("Validation failed: TextGrad's AIME solution was still incorrect.")
-            return None
+        for i in range(self.max_iterations):
+            print(f"--- Iteration {i+1}/{self.max_iterations} for problem ---")
+            
+            solution_trace = self.proposer.solve(current_prompt)
+            # solution_trace = "placeholder trace for testing"
+            if not solution_trace:
+                print("Proposer failed to generate a valid solution trace.")
+                # We can't proceed if the model gives no output.
+                return None
+            
+            reasoning_traces.append({"prompt": current_prompt, "trace": solution_trace})
+            extracted_ans_str = "-1"
+            try:
+                extracted_ans_str = extract_aime_answer_from_solution_v2(solution_trace)
+            except:
+                extracted_ans_str = "-1"
+                print("error, cannot extract ans from trace")
+            if extracted_ans_str == None:
+                extracted_ans_str = "-1"
+            answers.append(int(extracted_ans_str))
+            # if not verify_aime_answer(solution_trace, str(problem['answer'])):
+            #     print("SUCCESS: Proposer failed! Adversarial example found.")
+            #     # This is our final, high-quality data point.
+                
+            #     return {
+            #         "seed_problem": seed_problem['problem'],
+            #         "final_hardened_problem": current_prompt,
+            #         "correct_answer": problem['answer'],
+            #         "proposer_reasoning_traces": reasoning_traces, # Contains all attempts
+            #         "proposer_answers": answers,
+            #         "final_failed_trace": solution_trace,
+                        # "problems": problems,
+            #     }
+            
+            print("Proposer succeeded. Attempting to harden the problem...")
+            
+            if i == 0:
+                distractor = self.distractor_proposer.invoke("Given the following problem, successful solution trace and answer, generate distractor text. ")
+                print("Init distractor: ", distractor)
+            # Proposer succeeded, so we harden the problem for the next iteration
+            output = self.optimizer.harden_problem(problem, solution_trace, distractor, problem['answer'])
+            hardened_prompt = output[0]
+            distractor = output[1]
+            print("New distractor: ", distractor)
+            # --- Validation is critical ---
+            if not hardened_prompt:
+                print("Hardening process failed to produce a new problem. Stopping iteration.")
+                return None
+                
+            validation_response = self.validator.invoke(
+                f"Is the following problem valid and unambiguous? \n\n{hardened_prompt}",
+                temperature=1.0
+            )
+            print("Validation: ", validation_response)
+            if "INVALID" in validation_response.upper():
+                print(f"Generated problem failed validation. Stopping iteration. Reason: {validation_response}")
+                return None
+            
+            # Update the prompt for the next loop
+            current_prompt = hardened_prompt
+            problem['full_problem_text'] = hardened_prompt # Update context for next optimization
+            print("Harder problem: ", hardened_prompt)
+            problems.append(hardened_prompt)
+        print("Max iterations reached, but proposer kept succeeding. No final failure example generated.")
+        return None
