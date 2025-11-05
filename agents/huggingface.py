@@ -28,7 +28,7 @@ class HuggingFaceAgent:
     
     def solve(self, question: str) -> str:
         system_prompt = (
-            """You are an expert mathematician solving a problem from the American Invitational Mathematics Examination (AIME). Provide a rigorous, step-by-step proof. Your final answer must be an integer between 0 and 999.
+            """You are an expert mathematician solving a problem from  math competition. Provide a rigorous, step-by-step proof. 
             Be concise and efficient in your reasoning. 
             You MUST format and include your final answer strictly as following: [[FINAL ANSWER]]
             End your entire response with the exact phrase: <|END_OF_SOLUTION|>"""

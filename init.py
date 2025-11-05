@@ -1,10 +1,14 @@
 from huggingface_hub import login
 import os
+import sys
+from dotenv import load_dotenv
+
+load_dotenv()
 # from kaggle_secrets import UserSecretsClient
-HF_TOKEN = os.environ.get("HF_TOKEN")
-OPENAI_KEY = os.environ.get("OPENAI_KEY")
+HF_TOKEN = os.getenv("HF_TOKEN")
+OPENAI_KEY = os.getenv("OPENAI_KEY")
 import transformers
-login(HF_TOKEN)
+login(token = HF_TOKEN) 
 from openai import OpenAI
 client = OpenAI(
     # base_url = "https://api.lambdalabs.com/v1",

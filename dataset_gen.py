@@ -5,7 +5,7 @@ import re
 import json
 import logging
 from tqdm.notebook import tqdm
-from openai import OpenAI
+# from openai import OpenAI
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 import torch
 from datasets import load_dataset

@@ -1,5 +1,10 @@
-from agents.openaiagent import OpenAI
-
+# from agents.openaiagent import OpenAI
+from openai import OpenAI
+import os
+import sys
+from dotenv import load_dotenv
+load_dotenv()
+OPENAI_KEY = os.getenv("OPENAI_KEY")
 class OpenAIAgent:
     """
     A simple and reusable wrapper for making calls to the OpenAI API.
@@ -19,7 +24,7 @@ class OpenAIAgent:
         
         # Initialize the official OpenAI client.
         # It will automatically look for the "OPENAI_API_KEY" environment variable.
-        self.client = OpenAI()
+        self.client = OpenAI(api_key =  OPENAI_KEY,)
 
     def invoke(self, user_prompt: str, temperature: float = 1) -> str | None:
         """
@@ -39,17 +44,17 @@ class OpenAIAgent:
             {"role": "user", "content": user_prompt}
         ]
         
-        try:
+        # try:
             # Make the actual API call
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=temperature
-            )
-            # Extract the content from the first choice in the response
-            return response.choices[0].message.content.strip()
+        response = self.client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            temperature=temperature
+        )
+        # Extract the content from the first choice in the response
+        return response.choices[0].message.content.strip()
         
-        except Exception as e:
-            # Basic error handling for network issues, invalid keys, etc.
-            print(f"OpenAI API call failed for model {self.model}: {e}")
-            return None
+        # except Exception as e:
+        #     # Basic error handling for network issues, invalid keys, etc.
+        #     print(f"OpenAI API call failed for model {self.model}: {e}")
+        #     return None

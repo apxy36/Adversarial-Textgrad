@@ -1,6 +1,6 @@
 from agents.openaiagent import OpenAIAgent
 import textgrad as tg
-import textgrad.engines as tge
+import textgrad.engine as tge
 from textgrad.engine.openai import ChatOpenAI
 
 class AdversarialProblemOptimizer:
