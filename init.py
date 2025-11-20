@@ -7,7 +7,7 @@ load_dotenv()
 # from kaggle_secrets import UserSecretsClient
 HF_TOKEN = os.getenv("HF_TOKEN")
 OPENAI_KEY = os.getenv("OPENAI_KEY")
-import transformers
+# import transformers
 login(token = HF_TOKEN) 
 from openai import OpenAI
 client = OpenAI(

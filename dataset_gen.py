@@ -307,6 +307,10 @@ class IterativeHardeningPipeline:
         self.max_iterations = max_iterations
         self.distractor_proposer = OpenAIAgent(oracle_model_name, "You are a math expert. Add a new, confusingly-worded but logically superfluous statement (distractor) to a math problem to increase cognitive load, without changing the final answer.")
 
+        # test openai
+        test = self.distractor_proposer.invoke("What is 2 + 2?")
+        print("Openai Validator test: ", test)
+
     def process_problem(self, seed_problem: dict):
         # Adapt seed problem structure for our optimizer (example for GSM8k)
         ground_truth_solution = extract_answer_from_gsm8k(seed_problem['answer']) # solution

@@ -1,5 +1,6 @@
 # from agents.openaiagent import OpenAI
 from openai import OpenAI
+import time
 import os
 import sys
 from dotenv import load_dotenv
@@ -26,6 +27,28 @@ class OpenAIAgent:
         # It will automatically look for the "OPENAI_API_KEY" environment variable.
         self.client = OpenAI(api_key =  OPENAI_KEY,)
 
+    def _get_response(self, messages: list, temperature: float = 1) -> str | None:
+        """
+        A private method to make the actual API call.
+
+        Args:
+            messages (list): The list of messages to send to the API.
+            temperature (float): The creativity of the response.
+
+        Returns:
+            A string containing the model's response, or None if the API call fails.
+        """
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=temperature
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            print(f"An unexpected error occurred: {e}")
+            return None
+
     def invoke(self, user_prompt: str, temperature: float = 1) -> str | None:
         """
         Makes a single, stateless call to the OpenAI Chat Completions API.
@@ -43,18 +66,4 @@ class OpenAIAgent:
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": user_prompt}
         ]
-        
-        # try:
-            # Make the actual API call
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            temperature=temperature
-        )
-        # Extract the content from the first choice in the response
-        return response.choices[0].message.content.strip()
-        
-        # except Exception as e:
-        #     # Basic error handling for network issues, invalid keys, etc.
-        #     print(f"OpenAI API call failed for model {self.model}: {e}")
-        #     return None
+        return self._get_response(messages, temperature)

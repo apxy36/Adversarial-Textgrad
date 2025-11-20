@@ -83,6 +83,7 @@ class AdversarialProblemOptimizer:
             "The model successfully ignored the distractor. Your task is to critique the *distractor text*. "
             "Explain why it was not confusing enough and suggest how it could be made more salient or thematically integrated to trick the model into using it. "
             "Be very specific in your feedback on the distractor. Ensure that the distractor text is unambiguous and does not change the final answer of the problem with the distractor added."
+            "Ensure that the distractor is concise and short (2 sentences or less)."
             "\n\n--- MATH PROBLEM ---\n{problem}\nAnswer should be {correct_answer}."
             "\n\n--- MODEL'S CORRECT REASONING ---\n{successful_trace}"
             ),
@@ -139,7 +140,7 @@ class AdversarialProblemOptimizer:
 
         # Create the TextGrad Variable and Loss Function
         print("Distractor: ", distractor)
-        distractor = distractor
+        # distractor = distractor
         variable = tg.Variable(distractor, requires_grad=True, role_description="A part of a problem to be adversarially rewritten.")
         context = problem.get('full_problem_text', problem['question'])
         loss_instruction = strategy_config["loss_instruction_template"].format(problem=problem, correct_answer = correct_answer, 
