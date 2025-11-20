@@ -5,6 +5,10 @@ import re
 import json
 import logging
 from tqdm.notebook import tqdm
+
+from agents.openaiagent import OpenAIAgent
+from agents.huggingface import HuggingFaceAgent
+from agents.problem_optimiser import AdversarialProblemOptimizer
 # from openai import OpenAI
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 import torch
@@ -15,9 +19,7 @@ from textgrad.engine.openai import ChatOpenAI
 # from kaggle_secrets import UserSecretsClient
 import huggingface_hub
 
-from agents.openaiagent import OpenAIAgent
-from agents.huggingface import HuggingFaceAgent
-from agents.problem_optimiser import AdversarialProblemOptimizer
+
 
 def extract_aime_answer_from_solution_v2(solution_text: str) -> str | None:
     """

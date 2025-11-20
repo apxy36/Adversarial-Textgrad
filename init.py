@@ -3,6 +3,10 @@ import os
 import sys
 from dotenv import load_dotenv
 
+# Put this at the VERY TOP of your python script (before importing transformers)
+# import os
+import torch
+
 load_dotenv()
 # from kaggle_secrets import UserSecretsClient
 HF_TOKEN = os.getenv("HF_TOKEN")
