@@ -75,12 +75,12 @@ class HuggingFaceAgent:
 
         # Check for the "Silent Killer": Vocab Mismatch
         # If the tokenizer produces an ID larger than the model knows, it reads garbage (NaNs).
-        if hasattr(self.pipe, 'tokenizer') and hasattr(self.pipe, 'model'):
-            t_vocab = len(self.pipe.tokenizer)
-            m_vocab = self.pipe.model.config.vocab_size
-            print(f"DEBUG: Tokenizer Size: {t_vocab} | Model Vocab Size: {m_vocab}")
-            if t_vocab > m_vocab:
-                print("CRITICAL ERROR DETECTED: Tokenizer is larger than Model. This causes NaNs.")
+        # if hasattr(self.pipe, 'tokenizer') and hasattr(self.pipe, 'model'):
+        #     t_vocab = len(self.pipe.tokenizer)
+        #     m_vocab = self.pipe.model.config.vocab_size
+        #     print(f"DEBUG: Tokenizer Size: {t_vocab} | Model Vocab Size: {m_vocab}")
+        #     if t_vocab > m_vocab:
+        #         print("CRITICAL ERROR DETECTED: Tokenizer is larger than Model. This causes NaNs.")
         # --- DEBUG BLOCK END ---
         
         # --- MODIFIED: Add stopping criteria to the pipeline call ---

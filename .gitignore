@@ -212,3 +212,5 @@ results/
 logs/
 condaenv*
 ENTER
+*.jsonl
+qwen3_gpt5_dpo_dataset.jsonl

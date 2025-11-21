@@ -396,7 +396,7 @@ class IterativeHardeningPipeline:
                     return None
                     
                 validation_response = self.validator.invoke(
-                    f"Is the following problem valid and unambiguous, and is its answer the same as the one provided? \n\n{hardened_prompt} \n Provided Answer: {ground_truth_solution}",
+                    f"Is the following provided problem valid and unambiguous, and is its answer the same as the one provided? \n\n Provided problem: {hardened_prompt} \n Provided Answer: {ground_truth_solution} For reference, the original problem, which the provided problem was inspired by, was: {problems[0]}. The provided problem has been modified to be more difficult, but should still have the same answer as the original problem.",
                     temperature=1.0
                 )
                 print("Validation: ", validation_response)
