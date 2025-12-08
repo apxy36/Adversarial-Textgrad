@@ -83,6 +83,7 @@ class AdversarialProblemOptimizer:
             "The model successfully ignored the distractor. Your task is to critique the *distractor text*. "
             "Explain why it was not confusing enough and suggest how it could be made more salient or thematically integrated to trick the model into using it. "
             "Be very specific in your feedback on the distractor. Ensure that the distractor text is unambiguous and does not change the final answer of the problem with the distractor added."
+            "Also, examine if the distractor makes the problem invalid or changes its answer; if so, point that out. It must not do that. "
             "Ensure that the distractor is concise and short (2 sentences or less)."
             "\n\n--- MATH PROBLEM ---\n{problem}\nAnswer should be {correct_answer}."
             "\n\n--- MODEL'S CORRECT REASONING ---\n{successful_trace}"

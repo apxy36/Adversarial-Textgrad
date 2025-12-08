@@ -213,4 +213,6 @@ logs/
 condaenv*
 ENTER
 *.jsonl
-qwen3_gpt5_dpo_dataset.jsonl
+*.json
+# qwen3_gpt5_dpo_dataset.jsonl
+unsloth_compiled_cache

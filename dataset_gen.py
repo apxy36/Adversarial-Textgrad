@@ -36,10 +36,42 @@ def extract_aime_answer_from_solution_v2(solution_text: str) -> str | None:
     
     # Priority 1: Search for all \boxed{...} LaTeX commands.
     # The final answer is the last one.
-    boxed_matches = re.findall(r'\\boxed\{(\d{1,3})\}', solution_text)
-    if boxed_matches:
-        # Return the last number found inside a \boxed{}
-        return boxed_matches[-1]
+    try:
+        boxed_matches = re.findall(r'\\boxed\{(\d{1,3})\}', solution_text)
+        if boxed_matches:
+            # Return the last number found inside a \boxed{}
+            return boxed_matches[-1]
+    except:
+        pass
+    
+    try:
+        # Priority 1.5: Search for all [[...]] final answer formats.
+        # The final answer is the last one.
+        # search for numbers inside [[...]]
+        matches = re.findall(r'\[\[(\d{1,4})\]\]', solution_text)
+        # find decimals
+        if not matches:
+            matches = re.findall(r'\[\[(\d{1,4}\.\d+)\]\]', solution_text) # added to catch decimal answers in [[...]]
+            # remove decimals from matches via rounding e.g. 123.45 -> 123, 45.00 -> 45, 5.00 -> 5
+            if matches:
+                rounded_matches = []
+                for m in matches:
+                    try:
+                        rounded_num = str(int(round(float(m))))
+                        rounded_matches.append(rounded_num)
+                    except:
+                        continue
+                if rounded_matches:
+                    return rounded_matches[-1]
+            
+        if matches:
+            return matches[-1]
+    except:
+        pass
+    # matches = re.findall(r'\[\[(.*?)\]\]', solution_text)
+    # if matches:
+    #     return matches[-1]
+
 
     # Priority 2: Search for all common "answer is" type phrases.
     # We prioritize the last occurrence as it's most likely the final conclusion.
@@ -190,7 +222,8 @@ class DistractorOptimizer:
         loss_instruction = (
             "The following is a math problem, a model's correct reasoning, and the specific distractor text it was given. "
             "The model successfully ignored the distractor. Your task is to critique the *distractor text*. "
-            "Explain why it was not confusing enough and suggest how it could be made more salient or thematically integrated to trick the model into using it. "
+            "Explain why it was not confusing enough and suggest how it could be made more salient or thematically integrated to trick the model into using it."
+            "Also, examine if the distractor makes the problem invalid or changes its answer; if so, point that out. "
             "Be very specific in your feedback on the distractor."
             f"\n\n--- CORE QUESTION ---\n{core_question}\nAnswer should be {correct_answer}."
             f"\n\n--- MODEL'S CORRECT REASONING ---\n{successful_reasoning_trace}"
@@ -307,7 +340,8 @@ class IterativeHardeningPipeline:
         self.optimizer = AdversarialProblemOptimizer(oracle_model=oracle_model_name)
         self.validator = OpenAIAgent(oracle_model_name, "You are a validation expert. Check if a math problem is logically coherent and has one unambiguous answer. Respond with 'VALID' or 'INVALID' and a brief explanation.")
         self.max_iterations = max_iterations
-        self.distractor_proposer = OpenAIAgent(oracle_model_name, "You are a math expert. Add a new, confusingly-worded but logically superfluous statement (distractor) to a math problem to increase cognitive load, without changing the final answer.")
+        self.distractor_proposer = OpenAIAgent(oracle_model_name, "You are a math expert. Add a new, confusingly-worded but logically superfluous statement (distractor) to a math problem to increase cognitive load, without changing the final answer. " \
+        "Ensure the distractor is concise (2 sentences or less) and does not alter the problem's solution, answer or make it invalid.")
 
         # test openai
         test = self.distractor_proposer.invoke("What is 2 + 2?")
@@ -332,6 +366,7 @@ class IterativeHardeningPipeline:
         reasoning_traces = [] # To collect the traces at each difficulty level
         distractor = ""
         answers = []
+        distractors = []
         problems= [current_prompt]
         
         for i in range(self.max_iterations):
@@ -368,6 +403,8 @@ class IterativeHardeningPipeline:
                     "proposer_answers": answers,
                     "final_failed_trace": solution_trace,
                         "problems": problems,
+                    "distractors": distractors,
+                    
                 }
             
             print("Proposer succeeded. Attempting to harden the problem...")
@@ -415,5 +452,6 @@ class IterativeHardeningPipeline:
             problem['full_problem_text'] = hardened_prompt # Update context for next optimization
             print("Harder problem: ", hardened_prompt)
             problems.append(hardened_prompt)
+            distractors.append(distractor)
         print("Max iterations reached, but proposer kept succeeding. No final failure example generated.")
         return None

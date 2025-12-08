@@ -38,7 +38,7 @@ class HuggingFaceAgent:
     """Proposer model (Qwen3-4B) - with updated prompt for AIME."""
     # In your HuggingFaceAgent class
 
-    def __init__(self, model_name: str):
+    def __init__(self, model_name: str, prompt: str = ""):
         # ... (previous init code) ...
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast = False, trust_remote_code=True)
@@ -58,19 +58,24 @@ class HuggingFaceAgent:
         self.stop_sequence = "<|END_OF_SOLUTION|>"
         # We need the token IDs for the stopping criteria
         self.stop_token_ids = self.tokenizer.encode(self.stop_sequence, add_special_tokens=False)
+        if prompt == "":
+            self.prompt = (
+                """You are an expert mathematician solving a problem from a math competition. Provide a rigorous, step-by-step solution to the problem.
+                Be concise and efficient in your reasoning.
+                You MUST format and put your final answer strictly within \\boxed{}."""
+            )
+        else:
+            self.prompt = prompt
         
         # The eos_token_id is a more direct way to stop if your stop sequence is a single token.
         # For multi-token sequences, StoppingCriteria is more robust.
         # For this example, we'll add it to the generation call.
     
     def solve(self, question: str) -> str:
-        system_prompt = (
-            """You are an expert mathematician solving a problem from a math competition. Provide a rigorous, step-by-step proof. 
-            Be concise and efficient in your reasoning. 
-            You MUST format and include your final answer strictly as following: [[FINAL ANSWER]]
-            End your entire response with the exact phrase: <|END_OF_SOLUTION|>"""
-        )
-        messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": question}]
+        
+        
+        
+        messages = [{"role": "system", "content": self.prompt}, {"role": "user", "content": question}]
         prompt = self.pipe.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
         # Check for the "Silent Killer": Vocab Mismatch
