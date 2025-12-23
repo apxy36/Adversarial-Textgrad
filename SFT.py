@@ -1,5 +1,5 @@
 import os, sys, shutil
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 
 import torch
 from unsloth import FastLanguageModel
@@ -10,9 +10,9 @@ from datasets import load_dataset
 
 # Config
 MODEL_NAME = "unsloth/Qwen3-4B"
-INPUT_DATASET = "SFTpairs4.jsonl"
-OUTPUT_DIR = "/mnt/ssd/iclrtemp/adapters/qwen3_gsm8k_manual_loss"
-MAX_SEQ_LENGTH = 1024 * 2
+INPUT_DATASET = "SFTpairs6.jsonl"
+OUTPUT_DIR = "/mnt/ssd/iclrtemp/adapters/qwen3_gsm8k_v2.6"
+MAX_SEQ_LENGTH = 32768
 
 
 
@@ -101,8 +101,9 @@ trainer = SFTTrainer(
         
         # Hyperparameters
         warmup_steps = 5,
-        max_steps = 60,
+        max_steps = 500,
         learning_rate = 2e-5, # Standard safe LR
+        num_train_epochs = 3,
         
         # Precision (Native BF16 for RTX 6000)
         fp16 = False,

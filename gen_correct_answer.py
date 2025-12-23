@@ -3,10 +3,13 @@ from init import *
 import os
 import re
 import json
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 from tqdm.notebook import tqdm
 from openai import OpenAI
 import textgrad as tg
 from dataset_gen import *
+# from eval.MATH_Perturb.evaluate_perturb import extract_math_answer, extract_math_perturb_ground_truth_answer,  strip_string
+# from eval.MATH_Perturb.evaluate_perturb import answer_check
 
 # --- Helper Function for Answer Verification (same as before) ---
 # def xtract_aime_answer_from_solution_v2(text: str) -> str | None:
@@ -34,7 +37,7 @@ class TextGradFinalCorrector:
             Be concise and efficient in your reasoning.
             You MUST format and put your final answer strictly within \\boxed{}."""
         )
-        self.student_engine = HuggingFaceAgent("Qwen/Qwen3-4B", prompt=student_prompt)
+        self.student_engine = UnslothAgent("Qwen/Qwen3-4B", prompt=student_prompt)
 
     def correct(self, hardened_problem: str, failed_trace: str, last_successful_trace: str, correct_answer: str, original_problem: str, incorrect_answer: str) -> str | None:
         """
@@ -118,9 +121,10 @@ class TextGradFinalCorrector:
             num_tries = 0
             while (not student_valid and num_tries < max_tries):
                 student_prompt = (
-                    "You previously attempted this problem and failed. Please read the critique of your previous attempt and try to solve the problem again correctly.\n\n"
+                    "You previously attempted this problem and failed, and also attempted an easier version of this problem and suceeded. Please read the following information and try to solve the problem again correctly.\n\n"
                     f"--- Problem ---\n{hardened_problem}\n\n"
-                    f"--- Your Previous Attempt ---\n{failed_trace}\n\n"
+                    f"--- Your Previous Incorrect Attempt ---\n{failed_trace}\n\n"
+                    f"--- Your Last Successful Attempt (on an easier version of the problem) ---\n{last_successful_trace}\n\n"
                     f"--- Tutor's Critique/Hint ---\n{critique}\n\n"
                     "--- Instructions ---\n"
                     "Provide a new, corrected step-by-step solution. "
@@ -227,7 +231,7 @@ class CorrectionVerificationPipeline:
             f"\n\n Augmented Problem: {hardened_problem}"
             f"\n\n Original Problem: {original_problem}"
             f"\n\n Original Reasoning Trace: {original_reasoning_trace}"
-            f"\n\n STRICTLY format your answer in this format: [[your answer here]]. E.g. [[1]]. DO NOT use these square brackets in any other part of the solution. "
+            "\n\n Ensure that the final answer is STRICTLY formatted and put within \\boxed{}. Any other formatting is invalid."
             "\n\n Using only the information above, solve the augmented problem step-by-step."
         )
 
@@ -285,6 +289,8 @@ class CorrectionVerificationPipeline:
             # A final sanity check to ensure the TextGrad-corrected answer is actually correct.
             if verify_gsm8k_answer(y_chosen, correct_answer):
                 print("  + CORRECTION SUCCESSFUL: Final preference pair generated.")
+                
+                
                 textgrad_valid = True
                 return {
                     "prompt": hardened_problem,
@@ -303,11 +309,12 @@ class CorrectionVerificationPipeline:
 # --- Main Execution Block for Kaggle Notebook ---
 
 # Configuration
-ORACLE_MODEL_NAME = "gpt-5-2025-08-07" #"gpt-4.1"
+ORACLE_MODEL_NAME = "gpt-5.2-2025-12-11"
+# "gpt-5-2025-08-07" #"gpt-4.1"
 # Input file from the Stage 1 pipeline
 INPUT_FILE = "final_preference_pairs.jsonl" 
 # The final output file for fine-tuning
-OUTPUT_FILE = "SFTpairs5.jsonl"
+OUTPUT_FILE = "SFTpairs6.jsonl"
 
 # Initialize the Stage 2 pipeline
 pipeline_stage2 = CorrectionVerificationPipeline(oracle_model_name=ORACLE_MODEL_NAME)
@@ -329,8 +336,10 @@ if hardened_data_list:
         for hardened_data in tqdm(hardened_data_list, desc="Correcting and Verifying Problems"):
             result = pipeline_stage2.process_hardened_data(hardened_data)
             if result:
-                f.write(json.dumps(result) + '\n')
                 successful_pairs += 1
+                print("CORRECTION COUNT: ", successful_pairs)
+                f.write(json.dumps(result) + '\n')
+                
 
     print(f"\n--- PIPELINE STAGE 2 COMPLETE ---")
     print(f"Successfully generated and verified {successful_pairs} final preference pairs.")

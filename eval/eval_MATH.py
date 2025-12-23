@@ -1,8 +1,27 @@
-import os
+import os, sys
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1,2"
+# "1,2"
 
+from pathlib import Path
+current_file = Path(__file__).resolve()
+parent_dir = current_file.parent.parent
+sys.path.append(str(parent_dir))
+
+# from agents.unslothagent import UnslothAgent
+# 1. Get the path to the 'MATH_Perturb' folder
+current_dir = os.path.dirname(os.path.abspath(__file__))
+math_perturb_dir = os.path.join(current_dir, 'MATH_Perturb')
+
+# 2. Add it to Python's search path
+if math_perturb_dir not in sys.path:
+    sys.path.append(math_perturb_dir)
+import json
+# Now try the import again
+from MATH_Perturb.evaluate_perturb import answer_check, extract_predicted_answer, extract_ground_truth_answer
 from init import *
+from agents.unslothagent import UnslothAgent
+from agents.vllmagent import VLLMAgent
 import torch
 from unsloth import FastLanguageModel
 from trl import SFTTrainer
@@ -14,10 +33,13 @@ from tqdm import tqdm
 # --- Configuration ---
 # Path to your fine-tuned adapters (from SFT step) or the merged model
 # MODEL_PATH = "/mnt/ssd/iclrtemp/adapters/qwen3_gsm8k_v2.6"
-MODEL_PATH = "/mnt/ssd/iclrtemp/adapters/qwen3_metamath"
+# MODEL_PATH = "/mnt/ssd/iclrtemp/adapters/qwen3_metamath"
 
-# MODEL_PATH = "Qwen/Qwen3-4B"
+MODEL_PATH = "Qwen/Qwen3-14B"
 # MODEL_PATH = "unsloth/Qwen2.5-14B-Instruct-bnb-4bit" # Use this to test baseline
+# MODEL_PATH = "WizardLMTeam/WizardMath-7B-V1.1" # WizardMath finetuned on GSM8K
+# MODEL_PATH = "meta-math/MetaMath-Mistral-7B"
+# MODEL_PATH = "Vivacem/Mistral-7B-MMIQC"
 
 # Generation Config
 MAX_SEQ_LENGTH = 32768 # Max length for deep reasoning
@@ -101,7 +123,10 @@ def normalize_answer(answer: str) -> float | None:
     """Normalizes string answers to floats for comparison."""
     try:
         # Remove commas, dollar signs, etc.
-        clean_ans = re.sub(r"[^\d\.\-]", "", answer)
+        # normalise spaces
+        clean_ans = answer.replace(",", "").replace("$", "").replace('.', '').strip()
+        # .strip 
+        # clean_ans = re.sub(r"[^\d\.\-]", "", answer)
         return float(clean_ans)
     except (ValueError, TypeError):
         return None
@@ -123,8 +148,24 @@ def check_correctness(generated_output, ground_truth):
     # Fallback to exact string match (for non-numeric answers)
     return str(extracted_gen).strip() == str(ground_truth).strip(), extracted_gen
 
+def check_MATH500(generated_output, ground_truth):
+    answer_index = generated_output.find("The answer is: ")
+    if answer_index != -1:
+        extracted_gen = generated_output[answer_index + len("The answer is: "):].strip()
+        # extracted_gen = extracted_gen.replace(",", "").replace("$", "")
+        # extracted_gen = normalize_answer(extracted_gen[0]) if extracted_gen else None
+    else:
+        extracted_gen = extract_answer_value(generated_output)
+    norm_gen = normalize_answer(extracted_gen)
+    norm_gt = normalize_answer(str(ground_truth))
+    
+    if norm_gen is not None and norm_gt is not None:
+        return str(norm_gen).strip() == str(norm_gt).strip(), norm_gen
+    
+    return str(extracted_gen).strip() == str(ground_truth).strip(), extracted_gen
+
 # --- 2. Evaluation Runner ---
-def evaluate_dataset(model, tokenizer, dataset, dataset_name, num_samples=None):
+def evaluate_dataset(agent, dataset, dataset_name, num_samples=None):
     print(f"\n--- Starting Evaluation: {dataset_name} ---")
     
     correct_count = 0
@@ -135,7 +176,7 @@ def evaluate_dataset(model, tokenizer, dataset, dataset_name, num_samples=None):
     eval_data = dataset if num_samples is None else dataset.select(range(min(len(dataset), num_samples)))
 
     # Enable native inference optimizations
-    FastLanguageModel.for_inference(model)
+    # FastLanguageModel.for_inference(model)
 
     for i, example in tqdm(enumerate(eval_data), total=len(eval_data)):
         # Handle dataset-specific column names
@@ -147,30 +188,37 @@ def evaluate_dataset(model, tokenizer, dataset, dataset_name, num_samples=None):
             ground_truth = example.get('solution', example.get('answer'))
             # AIME GT often includes the full proof. We need just the boxed answer or last num.
             ground_truth = extract_answer_value(ground_truth)
+        elif "MATH500" in dataset_name:
+            question = example['problem']
+            ground_truth = example['answer']
 
         question += "Please put your final answer within \\boxed{}.\n"
         
         # Prepare Prompt (Using Qwen/ChatML format)
         messages = [
-            {"role": "user", "content": question}
+            {"role": "system", "content": "Below is an instruction that describes a task. Write a rigorous and appropriate step-by-step solution to the task. \nBe concise and efficient in your reasoning."},
+            {"role": "user", "content": "Instruction: " + question}
         ]
-        input_ids = tokenizer.apply_chat_template(
-            messages, 
-            tokenize=True, 
-            add_generation_prompt=True, 
-            return_tensors="pt"
-        ).to("cuda")
+
+        # input_ids = tokenizer.apply_chat_template(
+        #     messages, 
+        #     tokenize=True, 
+        #     add_generation_prompt=True, 
+        #     return_tensors="pt"
+        # ).to("cuda")
 
         # Generate
-        with torch.no_grad():
-            outputs = model.generate(
-                input_ids=input_ids,
-                max_new_tokens=MAX_SEQ_LENGTH, # Allow deep thinking
-                use_cache=True,
-                temperature=0.7, # Greedy decoding for reproducible eval
-            )
+        # with torch.no_grad():
+        #     outputs = model.generate(
+        #         input_ids=input_ids,
+        #         max_new_tokens=MAX_SEQ_LENGTH, # Allow deep thinking
+        #         use_cache=True,
+        #         temperature=0.7, # Greedy decoding for reproducible eval
+        #     )
         
-        generated_text = tokenizer.batch_decode(outputs, skip_special_tokens=True)[0]
+        # generated_text = tokenizer.batch_decode(outputs, skip_special_tokens=True)[0]
+
+        generated_text = agent.solve(question)
         
         # Isolate the assistant's response (remove the input prompt)
         # Note: formatting depends on tokenizer, usually splitting by "assistant" works
@@ -180,7 +228,16 @@ def evaluate_dataset(model, tokenizer, dataset, dataset_name, num_samples=None):
             response_text = generated_text
 
         # Verify
-        is_correct, extracted_val = check_correctness(response_text, ground_truth)
+        if dataset_name == "MATH":
+            is_correct = answer_check(question, response_text, ground_truth, 'peturb')
+            extracted_val = extract_ground_truth_answer('', response_text, 'original')
+            pred_val = extract_predicted_answer('', ground_truth, 'original')
+        elif dataset_name == "MATH500":
+            is_correct, extracted_val = check_MATH500(response_text, ground_truth)
+            pred_val = ground_truth
+        else: 
+            is_correct, extracted_val = check_correctness(response_text, ground_truth)
+            pred_val = extracted_val
         
         if is_correct:
             print(f"Sample {i}: Correct")
@@ -191,6 +248,7 @@ def evaluate_dataset(model, tokenizer, dataset, dataset_name, num_samples=None):
             print(f"  Ground Truth: {ground_truth}")
             print(f"  Generated Response: {response_text}")
             print(f"  Extracted Answer: {extracted_val}")
+            print(f"  True Answer: {pred_val}")
         total_count += 1
         
         results_log.append({
@@ -207,21 +265,33 @@ def evaluate_dataset(model, tokenizer, dataset, dataset_name, num_samples=None):
     
     return accuracy, results_log
 
+mistral_template = (
+    "{% for message in messages %}"
+    "{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}"
+    "{% endfor %}"
+    "{% if add_generation_prompt %}"
+    "{{ '<|im_start|>assistant\n' }}"
+    "{% endif %}"
+)
 # --- 3. Main Execution ---
 def main():
     # Load Model
     print(f"Loading Model from {MODEL_PATH}...")
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name = MODEL_PATH,
-        max_seq_length = MAX_SEQ_LENGTH,
-        dtype = dtype,
-        load_in_4bit = load_in_4bit,
-        device_map = 'auto' # {"": 0}
-    )
+    # model, tokenizer = FastLanguageModel.from_pretrained(
+    #     model_name = MODEL_PATH,
+    #     max_seq_length = MAX_SEQ_LENGTH,
+    #     dtype = dtype,
+    #     load_in_4bit = load_in_4bit,
+    #     device_map = 'auto' # {"": 0}
+    # )
+
+    # agent = UnslothAgent(MODEL_PATH)
+    agent = VLLMAgent(MODEL_PATH)
+    # agent.tokenizer.chat_template = mistral_template
     
     # 1. Evaluate GSM8K (Standard Test Set)
-    print("Loading GSM8K...")
-    gsm8k = load_dataset("openai/gsm8k", "main", split="test")
+    print("Loading MATH...")
+    math = load_dataset("HuggingFaceH4/MATH-500", "default", split="test")
     # acc_gsm, log_gsm = evaluate_dataset(model, tokenizer, gsm8k, "GSM8K", num_samples=100) # Set num_samples for debugging
     
     # 2. Evaluate AIME 2025 (Or fallback to standard AIME)
@@ -237,17 +307,18 @@ def main():
         full_aime = load_dataset("yentinglin/aime_2025", "default", split="train")
         # Take the last 50 problems as a proxy for 'recent/hard'
         aime_dataset = full_aime.select(range(0, len(full_aime))) 
-        dataset_label = "AIME (Last 50 Samples)"
+        # dataset_label = "AIME (Last 50 Samples)"
+        dataset_label = "MATH500"
 
-    acc_aime, log_aime = evaluate_dataset(model, tokenizer, aime_dataset, dataset_label)
+    acc_math, log_math = evaluate_dataset(agent, math, dataset_label, num_samples=500)
 
     # Save Results
-    output_file = "evaluation_results_qwen34b_metamath.json"
+    output_file = "evaluation_results_qwen14b_MATH_full.json"
     with open(output_file, "w") as f:
         json.dump({
             "config": {"model": MODEL_PATH},
             # "gsm8k": {"accuracy": acc_gsm, "details": log_gsm},
-            "aime": {"accuracy": acc_aime, "details": log_aime}
+            "math": {"accuracy": acc_math, "details": log_math}
         }, f, indent=2)
     print(f"Full logs saved to {output_file}")
 

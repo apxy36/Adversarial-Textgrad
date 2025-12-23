@@ -1,11 +1,17 @@
 from huggingface_hub import login
 import os
-import sys
+import sys, random
 from dotenv import load_dotenv
+import numpy as np
 
 # Put this at the VERY TOP of your python script (before importing transformers)
 # import os
 import torch
+torch.manual_seed(1234)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+np.random.seed(1234)
+random.seed(1234)
 
 load_dotenv()
 # from kaggle_secrets import UserSecretsClient

@@ -88,7 +88,7 @@ class AdversarialProblemOptimizer:
             "\n\n--- MATH PROBLEM ---\n{problem}\nAnswer should be {correct_answer}."
             "\n\n--- MODEL'S CORRECT REASONING ---\n{successful_trace}"
             ),
-            "reconstructor": lambda p, new_var: f"{p['full_problem_text']}\n- New Clue: {new_var}"
+            "reconstructor": lambda p, new_var: f"{p['full_problem_text']}\n- Info: {new_var}"
         }
         
         print(f"Initialized with {len(self.strategies)} adversarial strategies.")

@@ -2,6 +2,16 @@
 # Cell 2: Imports and Authentication
 import os
 import re
+import sys
+
+# 1. Get the path to the 'MATH_Perturb' folder
+current_dir = os.path.dirname(os.path.abspath(__file__))
+math_perturb_dir = os.path.join(current_dir + "/eval", 'MATH_Perturb')
+
+# 2. Add it to Python's search path
+if math_perturb_dir not in sys.path:
+    sys.path.append(math_perturb_dir)
+from agents.unslothagent import UnslothAgent
 import json
 import logging
 from tqdm.notebook import tqdm
@@ -16,8 +26,10 @@ from datasets import load_dataset
 import textgrad as tg
 import textgrad.engine as tge
 from textgrad.engine.openai import ChatOpenAI
+
 # from kaggle_secrets import UserSecretsClient
 import huggingface_hub
+from eval.MATH_Perturb.evaluate_perturb import extract_math_answer, extract_math_perturb_ground_truth_answer,  extract_predicted_answer, answer_check
 
 
 
@@ -37,12 +49,14 @@ def extract_aime_answer_from_solution_v2(solution_text: str) -> str | None:
     # Priority 1: Search for all \boxed{...} LaTeX commands.
     # The final answer is the last one.
     try:
-        boxed_matches = re.findall(r'\\boxed\{(\d{1,3})\}', solution_text)
+        boxed_matches = re.findall(r'\\boxed\{(\d{1,6})\}', solution_text)
         if boxed_matches:
             # Return the last number found inside a \boxed{}
             return boxed_matches[-1]
     except:
         pass
+
+
     
     try:
         # Priority 1.5: Search for all [[...]] final answer formats.
@@ -122,15 +136,29 @@ def verify_gsm8k_answer(generated_solution: str, correct_answer: str) -> bool:
     Verifies an AIME solution using the robust v2 extraction.
     """
     # Use the new extraction function to get the answer from the generated text
-    extracted_ans_str = extract_aime_answer_from_solution_v2(generated_solution)
+    # extracted_ans_str = extract_aime_answer_from_solution_v2(generated_solution)
+    extracted_ans_str = extract_predicted_answer("", generated_solution)[-1]
+    extracted_ans_str = extracted_ans_str.replace(",", "").strip()
+    extracted_ans_str = re.sub(r'[^\d]', '', extracted_ans_str)  # Remove non-digit characters
     
     if extracted_ans_str is None:
-        return False
+        extracted_ans_str = extract_aime_answer_from_solution_v2(generated_solution)
+        if extracted_ans_str is None:
+            return False
         
     extracted_answer = int(extracted_ans_str)
     correct_answer_int = int(correct_answer)
     
     return extracted_answer == correct_answer_int
+
+def verify_MATH_answer(generated_solution: str, correct_answer: str, dataset_type = 'original') -> bool:
+    if generated_solution is None:
+        return False
+    try: 
+        outcome = answer_check('', generated_solution, correct_answer, dataset_type)
+        return outcome
+    except: 
+        return False
 
 def extract_answer_from_gsm8k(text):
     try:
@@ -140,6 +168,14 @@ def extract_answer_from_gsm8k(text):
         ans = "-1"
     return ans
 
+def remove_think_tokens(text: str, end_think_token = "</think>") -> str:
+    """Removes all thinking tokens from the provided text."""
+    try:
+        end_think_token_index = text.find(end_think_token)
+        if end_think_token_index != -1:
+            return text[end_think_token_index + len(end_think_token):].strip()
+    except:
+        return text
 
 # You are an expert mathematician solving a problem from the American Invitational Mathematics Examination (AIME). Provide a rigorous, step-by-step proof. Your final answer must be an integer between 0 and 999.
 #             Format your final answer as following: [[FINAL ANSWER]]
@@ -335,11 +371,12 @@ ChatOpenAI._generate_from_single_prompt = new_generate_from_single_prompt
 
 
 class IterativeHardeningPipeline:
-    def __init__(self, proposer_model_name: str, oracle_model_name: str, max_iterations: int = 5):
-        self.proposer = HuggingFaceAgent(proposer_model_name)
+    def __init__(self, proposer_model_name: str, oracle_model_name: str, max_iterations: int = 5, dataset: str = 'MATH'):
+        self.proposer = UnslothAgent(proposer_model_name)
         self.optimizer = AdversarialProblemOptimizer(oracle_model=oracle_model_name)
         self.validator = OpenAIAgent(oracle_model_name, "You are a validation expert. Check if a math problem is logically coherent and has one unambiguous answer. Respond with 'VALID' or 'INVALID' and a brief explanation.")
         self.max_iterations = max_iterations
+        self.dataset = dataset
         self.distractor_proposer = OpenAIAgent(oracle_model_name, "You are a math expert. Add a new, confusingly-worded but logically superfluous statement (distractor) to a math problem to increase cognitive load, without changing the final answer. " \
         "Ensure the distractor is concise (2 sentences or less) and does not alter the problem's solution, answer or make it invalid.")
 
@@ -349,14 +386,34 @@ class IterativeHardeningPipeline:
 
     def process_problem(self, seed_problem: dict):
         # Adapt seed problem structure for our optimizer (example for GSM8k)
-        ground_truth_solution = extract_answer_from_gsm8k(seed_problem['answer']) # solution
-        problem = {
-            'framing': "", # GSM8k has no separate framing
-            'core_facts': seed_problem['question'], # problem
-            'question': "", # The question is part of the core_facts
-            'answer': int(ground_truth_solution), # int(extract_aime_answer_from_solution_v2(ground_truth_solution)),
-            'full_problem_text': seed_problem['question']
-        }
+        #  # solution
+        ground_truth_solution = ''
+        if self.dataset == 'MATH':
+            ground_truth_solution = extract_predicted_answer('', seed_problem['solution'])
+            ground_truth_solution = ', '.join(map(str, ground_truth_solution))
+            problem = {
+                'framing': "", # GSM8k has no separate framing
+                'core_facts': seed_problem['problem'], # problem # question 
+                'question': "", # The question is part of the core_facts
+                'answer': seed_problem['solution'], # int(extract_aime_answer_from_solution_v2(ground_truth_solution)),
+                'full_problem_text': seed_problem['problem'] # questoin
+            }
+        elif self.dataset == 'GSM8K':
+            ground_truth_solution = extract_answer_from_gsm8k(seed_problem['answer'])
+            problem = {
+                'framing': "", # GSM8k has no separate framing
+                'core_facts': seed_problem['question'], # problem # question 
+                'question': "", # The question is part of the core_facts
+                'answer': int(extract_aime_answer_from_solution_v2(ground_truth_solution)),
+                'full_problem_text': seed_problem['question'] # questoin
+            }
+
+
+        try:
+            problem['answer'] = int(problem['answer'])
+        except:
+            print("Answer is not an int: " )
+            print(problem['answer'])
         
         if not problem['answer']:
             print("Could not extract ground truth answer from seed problem. Skipping.")
@@ -391,10 +448,26 @@ class IterativeHardeningPipeline:
             if extracted_ans_str == None:
                 extracted_ans_str = "-1"
             answers.append(int(extracted_ans_str))
-            if not verify_gsm8k_answer(solution_trace, str(problem['answer'])):
-                print("SUCCESS: Proposer failed! Adversarial example found.")
+            # if not verify_gsm8k_answer(solution_trace, str(problem['answer'])):  for GSM8K
+            # if ( and self.dataset == 'MATH') or ( and self.dataset == 'GSM8K'):
+                
                 # This is our final, high-quality data point.
                 
+            if self.dataset == 'MATH' and not verify_MATH_answer(solution_trace, str(problem['answer'])):
+                print("SUCCESS: Proposer failed! Adversarial example found.")
+                return {
+                    "seed_problem": seed_problem['problem'], # problem
+                    "final_hardened_problem": current_prompt,
+                    "correct_answer": ground_truth_solution, # problem['answer']
+                    "proposer_reasoning_traces": reasoning_traces, # Contains all attempts
+                    "proposer_answers": answers,
+                    "final_failed_trace": solution_trace,
+                        "problems": problems,
+                    "distractors": distractors,
+                    
+                }
+            elif self.dataset == 'GSM8K' and not verify_gsm8k_answer(solution_trace, str(problem['answer'])):
+                print("SUCCESS: Proposer failed! Adversarial example found.")
                 return {
                     "seed_problem": seed_problem['question'], # problem
                     "final_hardened_problem": current_prompt,
@@ -412,18 +485,31 @@ class IterativeHardeningPipeline:
             max_tries = 3
             num_tries = 0
             soln_valid = False
+            no_think_solution_trace = remove_think_tokens(solution_trace)  
             while not soln_valid:
                 print("distractor try ", num_tries)
-                if i == 0:
+                if i == 0 and self.dataset == 'MATH':
                     distractor = self.distractor_proposer.invoke(f"""
                     Given the following problem, successful solution trace and answer, generate distractor text. 
                     Problem: {current_prompt}
-                    Successful solution trace: {solution_trace}
-                    Answer: {problem['answer']}
-                                                                 """)
+                    Successful solution trace: {no_think_solution_trace}
+                    Answer: {ground_truth_solution} 
+                                                                 """) # problem['answer']
+                    print("Init distractor: ", distractor)
+                elif i == 0 and self.dataset == "GSM8K": 
+                    distractor = self.distractor_proposer.invoke(f"""
+                    Given the following problem, successful solution trace and answer, generate distractor text. 
+                    Problem: {current_prompt}
+                    Successful solution trace: {no_think_solution_trace}
+                    Answer: {problem['answer']} 
+                                                                 """) # 
                     print("Init distractor: ", distractor)
                 # Proposer succeeded, so we harden the problem for the next iteration
-                output = self.optimizer.harden_problem(problem, solution_trace, distractor, problem['answer'])
+                if self.dataset == 'MATH':
+                    print("GT solution: ", ground_truth_solution)
+                    output = self.optimizer.harden_problem(problem, no_think_solution_trace, distractor, ground_truth_solution) # problem['answer']
+                else:
+                    output = self.optimizer.harden_problem(problem, no_think_solution_trace, distractor, problem['answer']) # 
                 hardened_prompt = output[0]
                 distractor = output[1]
                 print("New distractor: ", distractor)
@@ -455,3 +541,4 @@ class IterativeHardeningPipeline:
             distractors.append(distractor)
         print("Max iterations reached, but proposer kept succeeding. No final failure example generated.")
         return None
+    
