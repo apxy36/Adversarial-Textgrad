@@ -14,6 +14,22 @@ import torch
 from unsloth import FastLanguageModel
 from transformers import AutoTokenizer, LogitsProcessor, LogitsProcessorList
 
+from transformers import StoppingCriteria, StoppingCriteriaList
+
+class StringStopper(StoppingCriteria):
+    def __init__(self, stop_string, tokenizer):
+        self.stop_string = stop_string
+        self.tokenizer = tokenizer
+        
+    def __call__(self, input_ids, scores, **kwargs):
+        # Decode the last few tokens to check for the string
+        # We only check the newly generated part to be fast
+        decoded_text = self.tokenizer.decode(input_ids[0][-10:]) 
+        return self.stop_string in decoded_text
+
+# Usage
+
+
 # --- OPTIMIZATION SETTINGS ---
 # Unsloth requires Flash Attention. Do NOT disable it.
 torch.backends.cuda.enable_math_sdp(True)
@@ -32,9 +48,9 @@ class ClampLogitsProcessor(LogitsProcessor):
 class UnslothAgent:
     """Proposer model using Unsloth FastLanguageModel."""
 
-    def __init__(self, model_name: str, prompt: str = ""):
+    def __init__(self, model_name: str, prompt: str = "", think: bool = True):
         self.device = "cuda" # Unsloth automatically uses the visible CUDA device
-        
+        self.think = think
         # Unsloth requires a max_seq_length. 
         # Your original code requested 1536*40 (~61k tokens), so we set a high limit.
         self.max_seq_length = 32768 
@@ -50,6 +66,8 @@ class UnslothAgent:
             trust_remote_code = True,
         )
 
+        self.stopper = StringStopper("<|im_end|>", self.tokenizer)
+
         # ENABLE INFERENCE MODE (Crucial for Unsloth speedup)
         FastLanguageModel.for_inference(self.model)
         
@@ -63,9 +81,17 @@ class UnslothAgent:
 
         if prompt == "":
             self.prompt = (
-                """Below is an instruction that describes a task. Write a rigorous and appropriate step-by-step solution to the task.
-                Be concise and efficient in your reasoning.
-                You MUST format and put your final answer strictly within \\boxed{}."""
+                """Below is an instruction that describes a task. Write a response that appropriately completes the request.
+
+                ### Instruction:
+                Solve the following problem.
+                - Provide a direct final step-by-step solution in a single pass.
+                - Put your final answer on its own line as \\boxed{{...}}.
+                - Use exactly one \\boxed{{}} and do not box intermediate results.
+                
+                Output format:
+                -Steps: (multiple lines)
+                -Final answer: \\boxed{{...}}  (last line only)"""
             )
         else:
             self.prompt = prompt
@@ -82,6 +108,14 @@ class UnslothAgent:
             add_generation_prompt = True,
             return_tensors = "pt",
         ).to("cuda")
+        if not self.think:
+            inputs = self.tokenizer.apply_chat_template(
+                messages,
+                tokenize = True,
+                add_generation_prompt = True,
+                return_tensors = "pt",
+                enable_thinking = False
+            ).to("cuda")
 
         # --- GENERATION ---
         # We use model.generate directly instead of pipeline for better Unsloth integration
@@ -92,12 +126,15 @@ class UnslothAgent:
         with torch.no_grad():
             outputs = self.model.generate(
                 input_ids = inputs,
-                max_new_tokens = 30000, # Large buffer as requested (1536*40 approx)
+                max_new_tokens = 4096, # Large buffer as requested (1536*40 approx)
                 do_sample = True,
                 temperature = 0.7,
-                top_p = 0.9,
+                top_p = 0.8,
+                top_k = 20,
+                min_p = 0.0,
                 use_cache = True,
                 pad_token_id = self.tokenizer.eos_token_id,
+                # stopping_criteria=StoppingCriteriaList([self.stopper]), # <--- FORCE STOP MMIQC
                 # eos_token_id = self.stop_token_ids, # Uncomment if you want hard stopping on the token
                 # logits_processor = logits_processor
             )

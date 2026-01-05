@@ -2,6 +2,8 @@ from agents.openaiagent import OpenAIAgent
 import textgrad as tg
 import textgrad.engine as tge
 from textgrad.engine.openai import ChatOpenAI
+import json
+import logging
 
 class AdversarialProblemOptimizer:
     """
@@ -168,3 +170,99 @@ class AdversarialProblemOptimizer:
         # except Exception as e:
         #     print(f"TextGrad optimization for strategy '{strategy_name}' failed: {e}")
         #     return None
+
+# import textgrad as tg
+# import logging
+# import json
+
+# [Assume OpenAIAgent is defined]
+
+class OpenEndedAdversarialOptimizer:
+    """
+    A fully generalized optimizer that invents a custom adversarial strategy
+    for each specific problem instance.
+    """
+    def __init__(self, oracle_model: str):
+        self.oracle_model = oracle_model
+        
+        # The Architect invents the failure mode/attack plan
+        self.architect = OpenAIAgent(
+            oracle_model,
+            "You are a Red Team Architect. Your goal is to analyze a specific math problem and a model's successful solution to it. "
+            "You must diagnose the likely cognitive shortcuts the model took. "
+            "Then, devise a NOVEL, SPECIFIC strategy to rewrite this exact problem to exploit those shortcuts and induce failure, "
+            "without changing the underlying logic or the final answer."
+        )
+        
+        # TextGrad setup
+        tg.set_backward_engine(oracle_model, override=True)
+        self.optimizer_engine = tg.get_engine(oracle_model)
+
+    def harden_problem(self, problem_text: str, successful_trace: str, correct_answer: str) -> str | None:
+        """
+        Dynamically hardens a problem by synthesizing a custom attack strategy.
+        """
+        
+        # --- Step 1: Synthesize the Failure Mode (The "Attack Plan") ---
+        architect_prompt = (
+            f"--- PROBLEM ---\n{problem_text}\n\n"
+            f"--- MODEL'S SUCCESSFUL TRACE ---\n{successful_trace}\n\n"
+            "Analyze the model's reasoning. Did it rely on simple keyword matching? Did it assume a standard format? "
+            "Did it skip a verification step?\n\n"
+            "Based on this, write a concise, imperative instruction for an optimizer to rewrite the problem. "
+            "The instruction should describe EXACTLY how to mutate the text to break the model's specific reasoning path. "
+            "Do not just say 'make it harder'. Be specific (e.g., 'Embed the critical variable X inside a conditional clause about Y').\n\n"
+            "Output valid JSON: {\"diagnosis\": \"...\", \"attack_instruction\": \"...\"}"
+        )
+        
+        response_str = self.architect.invoke(architect_prompt, temperature=0.7) # Higher temp for creativity
+        
+        try:
+            plan = json.loads(response_str)
+            diagnosis = plan['diagnosis']
+            attack_instruction = plan['attack_instruction']
+        except:
+            logging.error("Architect failed to generate a valid JSON attack plan.")
+            return None
+
+        print(f"Architect Diagnosis: {diagnosis}")
+        print(f"Generated Attack Instruction: {attack_instruction}")
+
+        # --- Step 2: Configure TextGrad with the Dynamic Instruction ---
+        
+        # The variable is the ENTIRE problem text. 
+        # We give the optimizer total freedom to rewrite it.
+        problem_variable = tg.Variable(
+            problem_text,
+            requires_grad=True,
+            role_description="A math problem to be adversarially rewritten."
+        )
+
+        # We construct the Loss Instruction dynamically using the Architect's output.
+        # This is the "Placeholder Pipeline" becoming concrete.
+        dynamic_loss_instruction = (
+            f"You are an adversarial content generator. {attack_instruction} "
+            "Ensure the final answer remains mathematically identical to the original answer. "
+            "Critique the current problem text, with reference to the successful trace. If it does not yet fully implement this attack strategy, "
+            "rewrite it to be more challenging to solve."
+            f"Original Answer: {correct_answer}"
+            f"Successful Trace: {successful_trace}"
+            # f"\n\n--- CURRENT PROBLEM TEXT ---\n{input}"
+        )
+        
+        loss_fn = tg.TextLoss(instruction=dynamic_loss_instruction)
+        optimizer = tg.TGD(parameters=[problem_variable], engine=self.optimizer_engine)
+
+        # --- Step 3: Optimization Loop ---
+        try:
+            loss = loss_fn(problem_variable)
+            # The gradient here describes how well the current text matches the *dynamic* attack plan
+            print(f"TextGrad Dynamic Critique: {loss.value}") 
+            loss.backward()
+            optimizer.step()
+            
+            return problem_variable.value
+            
+        except Exception as e:
+            logging.error(f"TextGrad dynamic optimization failed: {e}")
+            return None

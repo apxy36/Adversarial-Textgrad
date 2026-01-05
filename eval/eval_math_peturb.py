@@ -125,7 +125,10 @@ def evaluate_dataset(dataset_path, model_evaluator, output_file, limit=None):
         is_correct = answer_check('', prediction, ground_truth, 'perturb')
         
         if is_correct:
+            print("Correct prediction.")
             correct_count += 1
+        else:
+            print(f"Incorrect prediction. Ground truth: {ground_truth}, Prediction: {prediction[-100:]}")
             
         results.append({
             "problem_id": item.get('problem_id'),
@@ -177,7 +180,8 @@ if __name__ == "__main__":
 
     evaluator_2 = UnslothAgent(
         model_name=args.model_path,
-        prompt="You are an expert mathematician. Solve the following problem step-by-step and provide the final answer in \\boxed{}."
+        think=False,
+        # prompt="You are an expert mathematician. Solve the following problem step-by-step and provide the final answer in \\boxed{}."
     ) # set cuda to 2
 
     # Auto-discover files based on keywords "simple" and "hard"

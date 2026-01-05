@@ -18,7 +18,7 @@ from tqdm.notebook import tqdm
 
 from agents.openaiagent import OpenAIAgent
 from agents.huggingface import HuggingFaceAgent
-from agents.problem_optimiser import AdversarialProblemOptimizer
+from agents.problem_optimiser import AdversarialProblemOptimizer, OpenEndedAdversarialOptimizer
 # from openai import OpenAI
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 import torch
@@ -291,6 +291,7 @@ class AdversarialPipeline:
         self.referee = OpenAIAgent(oracle_model_name, "You are an objective expert. Provide a correct, step-by-step solution. Your final answer must be correct and clearly stated.")
         self.validator = OpenAIAgent(oracle_model_name, "You are a validation expert. Your task is to check if a math problem is logical and well-formed. Respond with 'VALID' or 'INVALID' and a brief explanation.")
         self.max_optim_steps = max_distractor_optim_steps
+        self.open_ended_optimizer = OpenEndedAdversarialOptimizer(oracle_model=oracle_model_name)
         
         
 
@@ -379,7 +380,7 @@ class IterativeHardeningPipeline:
         self.dataset = dataset
         self.distractor_proposer = OpenAIAgent(oracle_model_name, "You are a math expert. Add a new, confusingly-worded but logically superfluous statement (distractor) to a math problem to increase cognitive load, without changing the final answer. " \
         "Ensure the distractor is concise (2 sentences or less) and does not alter the problem's solution, answer or make it invalid.")
-
+        self.open_ended_optimizer = OpenEndedAdversarialOptimizer(oracle_model=oracle_model_name)
         # test openai
         test = self.distractor_proposer.invoke("What is 2 + 2?")
         print("Openai Validator test: ", test)
@@ -487,32 +488,34 @@ class IterativeHardeningPipeline:
             soln_valid = False
             no_think_solution_trace = remove_think_tokens(solution_trace)  
             while not soln_valid:
-                print("distractor try ", num_tries)
-                if i == 0 and self.dataset == 'MATH':
-                    distractor = self.distractor_proposer.invoke(f"""
-                    Given the following problem, successful solution trace and answer, generate distractor text. 
-                    Problem: {current_prompt}
-                    Successful solution trace: {no_think_solution_trace}
-                    Answer: {ground_truth_solution} 
-                                                                 """) # problem['answer']
-                    print("Init distractor: ", distractor)
-                elif i == 0 and self.dataset == "GSM8K": 
-                    distractor = self.distractor_proposer.invoke(f"""
-                    Given the following problem, successful solution trace and answer, generate distractor text. 
-                    Problem: {current_prompt}
-                    Successful solution trace: {no_think_solution_trace}
-                    Answer: {problem['answer']} 
-                                                                 """) # 
-                    print("Init distractor: ", distractor)
+                print("hardening try ", num_tries)
+                # if i == 0 and self.dataset == 'MATH':
+                #     distractor = self.distractor_proposer.invoke(f"""
+                #     Given the following problem, successful solution trace and answer, generate distractor text. 
+                #     Problem: {current_prompt}
+                #     Successful solution trace: {no_think_solution_trace}
+                #     Answer: {ground_truth_solution} 
+                #                                                  """) # problem['answer']
+                #     print("Init distractor: ", distractor)
+                # elif i == 0 and self.dataset == "GSM8K": 
+                #     distractor = self.distractor_proposer.invoke(f"""
+                #     Given the following problem, successful solution trace and answer, generate distractor text. 
+                #     Problem: {current_prompt}
+                #     Successful solution trace: {no_think_solution_trace}
+                #     Answer: {problem['answer']} 
+                #                                                  """) # 
+                #     print("Init distractor: ", distractor)
                 # Proposer succeeded, so we harden the problem for the next iteration
                 if self.dataset == 'MATH':
                     print("GT solution: ", ground_truth_solution)
-                    output = self.optimizer.harden_problem(problem, no_think_solution_trace, distractor, ground_truth_solution) # problem['answer']
+                    # output = self.optimizer.harden_problem(problem, no_think_solution_trace, distractor, ground_truth_solution) # problem['answer']
+                    output = self.open_ended_optimizer.harden_problem(current_prompt, no_think_solution_trace, ground_truth_solution)
                 else:
-                    output = self.optimizer.harden_problem(problem, no_think_solution_trace, distractor, problem['answer']) # 
-                hardened_prompt = output[0]
-                distractor = output[1]
-                print("New distractor: ", distractor)
+                    # output = self.optimizer.harden_problem(problem, no_think_solution_trace, distractor, problem['answer']) # 
+                    output = self.open_ended_optimizer.harden_problem(current_prompt, no_think_solution_trace, str(problem['answer']))
+                hardened_prompt = output
+                # distractor = output[1]
+                print("New problem: ", hardened_prompt)
                 # --- Validation is critical ---
                 if not hardened_prompt:
                     print("Hardening process failed to produce a new problem. Stopping iteration.")
@@ -538,7 +541,7 @@ class IterativeHardeningPipeline:
             problem['full_problem_text'] = hardened_prompt # Update context for next optimization
             print("Harder problem: ", hardened_prompt)
             problems.append(hardened_prompt)
-            distractors.append(distractor)
+            # distractors.append(distractor)
         print("Max iterations reached, but proposer kept succeeding. No final failure example generated.")
         return None
     

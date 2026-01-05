@@ -1,9 +1,11 @@
 import os, sys
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "1,2"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 # "1,2"
 
 from pathlib import Path
+from math_verify import parse, verify
+# from math_verify import parse, verify
 current_file = Path(__file__).resolve()
 parent_dir = current_file.parent.parent
 sys.path.append(str(parent_dir))
@@ -21,7 +23,7 @@ import json
 from MATH_Perturb.evaluate_perturb import answer_check, extract_predicted_answer, extract_ground_truth_answer
 from init import *
 from agents.unslothagent import UnslothAgent
-from agents.vllmagent import VLLMAgent
+# from agents.vllmagent import VLLMAgent
 import torch
 from unsloth import FastLanguageModel
 from trl import SFTTrainer
@@ -30,16 +32,19 @@ from datasets import load_dataset
 import re
 import json
 from tqdm import tqdm
+import argparse
 # --- Configuration ---
 # Path to your fine-tuned adapters (from SFT step) or the merged model
 # MODEL_PATH = "/mnt/ssd/iclrtemp/adapters/qwen3_gsm8k_v2.6"
 # MODEL_PATH = "/mnt/ssd/iclrtemp/adapters/qwen3_metamath"
 
-MODEL_PATH = "Qwen/Qwen3-14B"
+# MODEL_PATH = "Qwen/Qwen3-14B"
 # MODEL_PATH = "unsloth/Qwen2.5-14B-Instruct-bnb-4bit" # Use this to test baseline
 # MODEL_PATH = "WizardLMTeam/WizardMath-7B-V1.1" # WizardMath finetuned on GSM8K
 # MODEL_PATH = "meta-math/MetaMath-Mistral-7B"
 # MODEL_PATH = "Vivacem/Mistral-7B-MMIQC"
+# MODEL_PATH = "hkust-nlp/dart-math-dsmath-7b-prop2diff"
+MODEL_PATH = "/mnt/ssd/iclrtemp/adapters/qwen3_14b_WIZARDMATH120_SFT/checkpoint-500"
 
 # Generation Config
 MAX_SEQ_LENGTH = 32768 # Max length for deep reasoning
@@ -149,13 +154,43 @@ def check_correctness(generated_output, ground_truth):
     return str(extracted_gen).strip() == str(ground_truth).strip(), extracted_gen
 
 def check_MATH500(generated_output, ground_truth):
+
+    if generated_output is None or generated_output.strip() ==  '' or ground_truth is None or ground_truth.strip() == '':
+        return False, ''
+    
+    
+    
+    # print("OUTPUT ", generated_output, "GT: ", ground_truth)
     answer_index = generated_output.find("The answer is: ")
+
+    # check for nonetype object
+    extracted_gen = None
     if answer_index != -1:
         extracted_gen = generated_output[answer_index + len("The answer is: "):].strip()
         # extracted_gen = extracted_gen.replace(",", "").replace("$", "")
         # extracted_gen = normalize_answer(extracted_gen[0]) if extracted_gen else None
+    
+    if extracted_gen is None:
+        if parse(generated_output) is not None or len(parse(generated_output)) > 0:
+            extracted_gen = extract_predicted_answer('', generated_output)
     else:
         extracted_gen = extract_answer_value(generated_output)
+
+
+    gold = parse(f"${ground_truth}$")
+    answer = parse(generated_output)
+    try:
+        ans_correct = verify(gold, answer)
+    except:
+        return False, extracted_gen
+    
+    if not ans_correct:
+    # ans_correct = verify(ground_truth, extracted_gen)
+        try:
+            ans_correct = answer_check('', generated_output, ground_truth, 'original')
+        except:
+            return False, extracted_gen
+    return ans_correct, answer
     norm_gen = normalize_answer(extracted_gen)
     norm_gt = normalize_answer(str(ground_truth))
     
@@ -273,10 +308,33 @@ mistral_template = (
     "{{ '<|im_start|>assistant\n' }}"
     "{% endif %}"
 )
+
+deepseek_math_template = (
+    "{% for message in messages %}"
+    "{% if message['role'] == 'user' %}"
+    "User: {{ message['content'] }} "
+    "{% elif message['role'] == 'assistant' %}"
+    "Assistant: {{ message['content'] }}{{ eos_token }}"
+    "{% endif %}"
+    "{% endfor %}"
+    "{% if add_generation_prompt %}"
+    "Assistant:"
+    "{% endif %}"
+)
 # --- 3. Main Execution ---
 def main():
     # Load Model
     print(f"Loading Model from {MODEL_PATH}...")
+
+    # argparse for command line arguments
+    parser = argparse.ArgumentParser(description="Evaluate Language Model on Math Datasets")
+    parser.add_argument("--model_path", type=str, default=MODEL_PATH, help="Path to the language model")
+    parser.add_argument("--output_file", type=str, default="evaluation_results.json", help="File to save evaluation results")
+    parser.add_argument("--num_samples", type=int, default=500, help="Number of samples to evaluate (default: all)")
+    # parser.add_argument("--max_seq_length", type=int, default=MAX
+    args = parser.parse_args()
+
+
     # model, tokenizer = FastLanguageModel.from_pretrained(
     #     model_name = MODEL_PATH,
     #     max_seq_length = MAX_SEQ_LENGTH,
@@ -285,9 +343,19 @@ def main():
     #     device_map = 'auto' # {"": 0}
     # )
 
-    # agent = UnslothAgent(MODEL_PATH)
-    agent = VLLMAgent(MODEL_PATH)
-    # agent.tokenizer.chat_template = mistral_template
+    agent = UnslothAgent(args.model_path, think=False)
+    # agent = VLLMAgent(MODEL_PATH)
+    # agent.tokenizer.chat_template = deepseek_math_template
+
+    # # padding adjustment for MMIQC only
+    # # Set the EOS token to the ChatML end token
+    # agent.tokenizer.eos_token = "<|im_end|>"
+    # # Ensure the ID is updated
+    # agent.tokenizer.eos_token_id = agent.tokenizer.convert_tokens_to_ids("<|im_end|>")
+
+    # agent.tokenizer.pad_token = agent.tokenizer.eos_token
+    # agent.tokenizer.pad_token_id = agent.tokenizer.eos_token_id
+    # agent.tokenizer.padding_side = "left"
     
     # 1. Evaluate GSM8K (Standard Test Set)
     print("Loading MATH...")
@@ -310,13 +378,14 @@ def main():
         # dataset_label = "AIME (Last 50 Samples)"
         dataset_label = "MATH500"
 
-    acc_math, log_math = evaluate_dataset(agent, math, dataset_label, num_samples=500)
+    acc_math, log_math = evaluate_dataset(agent, math, dataset_label, num_samples=args.num_samples)
 
     # Save Results
-    output_file = "evaluation_results_qwen14b_MATH_full.json"
+    output_file = args.output_file
+    # "evaluation_results_wizardmath120_full.json"
     with open(output_file, "w") as f:
         json.dump({
-            "config": {"model": MODEL_PATH},
+            "config": {"model": args.model_path},
             # "gsm8k": {"accuracy": acc_gsm, "details": log_gsm},
             "math": {"accuracy": acc_math, "details": log_math}
         }, f, indent=2)

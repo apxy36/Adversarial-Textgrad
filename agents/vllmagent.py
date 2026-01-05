@@ -2,12 +2,23 @@ import os
 import sys
 # Fix memory fragmentation (Optional but recommended)
 os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
+os.environ["NCCL_P2P_DISABLE"] = "1"
+os.environ["NCCL_IB_DISABLE"] = "1"
 
+# 2. Disable vLLM's experimental V1 engine (Your traceback shows you are using V1).
+# We want the stable V0 engine.
+os.environ["VLLM_USE_V1"] = "0"
+
+# 3. specific fix for "custom_all_reduce" crash
+os.environ["VLLM_DISABLE_CUSTOM_ALL_REDUCE"] = "true"
+
+# 4. Set Visible Devices
+# os.environ["CUDA_VISIBLE_DEVICES"] = "0,1"
 
 # --- DEVICE CONFIGURATION ---
 # To use multiple GPUs, list them with commas (e.g., "0,1,2,3").
 # If you set this to "0,1", vLLM will automatically use both GPUs via Tensor Parallelism.
-os.environ["CUDA_VISIBLE_DEVICES"] = "1,2"  # <--- MODIFY THIS LIST AS NEEDED
+# os.environ["CUDA_VISIBLE_DEVICES"] = "1,2"  # <--- MODIFY THIS LIST AS NEEDED
 
 # vLLM Optimizations
 # If you run into OutOfMemory errors on initialization, lower the utilization (default is 0.90)
