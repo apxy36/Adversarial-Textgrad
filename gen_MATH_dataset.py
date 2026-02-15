@@ -17,7 +17,7 @@ def main():
     parser.add_argument("--data_dir", type=str, default="qwedsacf/competition_math", help="Directory containing MATH dataset files.")
     
     # Argument to select which split of MATH to sample from (default is test)
-    parser.add_argument("--split", type=str, default="test", choices=["train", "test"], 
+    parser.add_argument("--split", type=str, default="train", choices=["train", "test"], 
                         help="The split of the original MATH dataset to sample from (usually 'test').")
 
     args = parser.parse_args()
@@ -51,7 +51,7 @@ def main():
     
     for item in ds_math:
         # Check if the problem text exists in the forbidden set
-        if item['instruction'].strip() not in forbidden_problems: # problem
+        if item['problem'].strip() not in forbidden_problems: # problem
             available_pool.append(item)
 
     total_available = len(available_pool)

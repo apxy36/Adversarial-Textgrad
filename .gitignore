@@ -217,6 +217,7 @@ ENTER
 # qwen3_gpt5_dpo_dataset.jsonl
 unsloth_compiled_cache
 eval/MATH_Perturb
+eval/sh
 todos.md
 evol-instruct
 SwS
@@ -225,3 +226,9 @@ verl2
 verl
 SwS/
 scripts/
+jobs_prev/
+eval/final_eval_results
+eval/other_eval_results
+eval/val_results
+vllm_analysis
+*.png

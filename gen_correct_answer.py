@@ -235,6 +235,8 @@ class CorrectionVerificationPipeline:
             "\n\n Using only the information above, solve the augmented problem step-by-step."
         )
 
+        # provide with hardened problem, orig problem, final loss (possible reasons for a failure), and original reasoning trace.
+
         max_tries = 3
         verifier_valid = False
         num_tries = 0

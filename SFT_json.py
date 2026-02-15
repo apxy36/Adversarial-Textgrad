@@ -2,7 +2,7 @@ import os
 import sys
 
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "3" # Adjust as needed
+# os.environ["CUDA_VISIBLE_DEVICES"] = "0" # Adjust as needed
 from unsloth import FastLanguageModel
 import json
 import re
@@ -15,9 +15,17 @@ from trl import SFTTrainer
 from pathlib import Path
 from math_verify import parse, verify
 import wandb
+import random, math
+import os
+import sys, random
+from dotenv import load_dotenv
 
 os.environ["WANDB_PROJECT"] = "adversarial-textgrad"  # Set your WandB project name
 os.environ["WANDB_LOG_MODEL"] = "checkpoint"     # Log model checkpoints to wandb (optional)
+load_dotenv()
+# from kaggle_secrets import UserSecretsClient
+WANDB_KEY = os.getenv("WANDB_API_KEY")
+wandb.login(key=WANDB_KEY)
 
 current_file = Path(__file__).resolve()
 parent_dir = current_file.parent.parent
@@ -169,7 +177,17 @@ class MathEvalCallback(TrainerCallback):
         
         correct_count = 0
         total_count = 0
+        per_sample_results = []
         
+        full_path = os.path.expanduser(self.log_file)
+    
+        # 2. Get the directory name (e.g., ~/scratch/AAs/adapters/oss_20b_test_NSCC/)
+        log_dir = os.path.dirname(full_path)
+        
+        # 3. Create the directories if they don't exist
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir, exist_ok=True)
+            print(f"Created directory: {log_dir}")
         # 2. Iterate through validation dataset
         # We wrap in tqdm for a progress bar
         for example in tqdm(self.eval_subset, desc="Evaluating"):
@@ -179,7 +197,7 @@ class MathEvalCallback(TrainerCallback):
             # Format message for Chat Model
             messages = [
                 {"role": "system", "content": 
-                 """Below is an instruction that describes a task. Write a response that appropriately completes the request.
+                 """ Below is an instruction that describes a task. Write a response that appropriately completes the request.
 
                 ### Instruction:
                 Solve the following problem.
@@ -191,7 +209,7 @@ class MathEvalCallback(TrainerCallback):
                 -Steps: (multiple lines)
                 -Final answer: \\boxed{{...}}  (last line only)"""                
                  },
-                {"role": "user", "content": prompt}
+                {"role": "user", "content": prompt},
             ]
             
             inputs = self.tokenizer.apply_chat_template(
@@ -201,24 +219,26 @@ class MathEvalCallback(TrainerCallback):
                 return_tensors="pt",
                 truncation=True,
                 max_length=self.max_seq_length,
-                enable_thinking = False, 
+                reasoning_effort='low',
+                # enable_thinking = False, 
             ).to("cuda")
 
             # Generate
-            with torch.no_grad():
-                outputs = model.generate(
-                    input_ids=inputs,
-                    max_new_tokens=4096, # Enough for reasoning
-                    use_cache=True,
-                    temperature=0.7,    # Greedy decoding for eval
-                    pad_token_id=self.tokenizer.eos_token_id,
-                    top_p = 0.8, # for Qwen
-                    top_k = 20, 
-                    min_p = 0.0,
-                )
+            # with torch.no_grad():
+                # outputs = model.generate(
+                #     input_ids=inputs,
+                #     max_new_tokens=4096, # Enough for reasoning
+                #     use_cache=True,
+                #     temperature=1.0,    # Greedy decoding for eval
+                #     pad_token_id=self.tokenizer.eos_token_id,
+                #     top_p = 1.0, # for Qwen: 0.8
+                #     top_k = 0, # 20
+                #     # min_p = 0.0,
+                # )
             
             # Decode
-            generated_text = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)[0]
+            # generated_text = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)[0]
+            generated_text = ' placeholder for generated text ' # --- IGNORE ---
             
             # Extract Assistant Response (Strip user prompt)
             # Depending on template, it might contain the prompt. 
@@ -232,6 +252,11 @@ class MathEvalCallback(TrainerCallback):
 
             # Check Answer
             is_correct, extracted = check_MATH500(response_text, ground_truth)
+            # Normalize extracted answer for JSON (stringify parser output)
+            try:
+                extracted_str = str(extracted) if extracted is not None else None
+            except Exception:
+                extracted_str = None
 
             
             
@@ -244,6 +269,27 @@ class MathEvalCallback(TrainerCallback):
                 print("RESPONSE TEXT: ", response_text[-250:])
                 print("GROUND TRUTH: ", ground_truth[-250:])
             total_count += 1
+            # record per-sample (sanitize types to ensure JSON serializable)
+            try:
+                sanitized = {
+                    'step': int(step) if step is not None else None,
+                    'problem': str(prompt) if prompt is not None else None,
+                    'generated_solution': str(response_text) if response_text is not None else None,
+                    'extracted_answer': str(extracted_str) if extracted_str is not None else None,
+                    'ref_answer': str(ground_truth) if ground_truth is not None else None,
+                    'is_correct': bool(is_correct),
+                }
+            except Exception:
+                # Fallback: coerce everything to str/bool
+                sanitized = {k: (str(v) if k != 'is_correct' else bool(v)) for k, v in {
+                    'step': step,
+                    'problem': prompt,
+                    'generated_solution': response_text,
+                    'extracted_answer': extracted_str,
+                    'ref_answer': ground_truth,
+                    'is_correct': is_correct,
+                }.items()}
+            per_sample_results.append(sanitized)
 
         # 3. Calculate Metrics
         accuracy = correct_count / total_count if total_count > 0 else 0
@@ -253,8 +299,30 @@ class MathEvalCallback(TrainerCallback):
 
         # Log to file
         log_entry = {"step": step, "accuracy": accuracy, "correct": correct_count, "total": total_count}
-        with open(self.log_file, "a") as f:
+        log_path = os.path.join(self.output_dir, f"eval_history.jsonl")
+        log_path = os.path.expanduser(log_path) 
+
+        print("log_path: ", log_path)
+
+        # 2. Ensure the directory actually exists before writing
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        print("log_path: ", log_path)
+        with open(log_path, "a") as f:
             f.write(json.dumps(log_entry) + "\n")
+
+        # Merge per-sample details into a single summary JSON for this validation step
+        merged = {
+            'step': int(step) if step is not None else None,
+            'accuracy': float(accuracy),
+            'correct': int(correct_count),
+            'total': int(total_count),
+            'details': per_sample_results,
+        }
+        merged_path = os.path.join(self.output_dir, f"eval_summary_step_{step}.json")
+        merged_path = os.path.expanduser(merged_path) 
+        os.makedirs(os.path.dirname(merged_path), exist_ok=True)
+        with open(merged_path, 'w', encoding='utf-8') as mf:
+            json.dump(merged, mf, ensure_ascii=False)
         # Log to wandb or trainer history if needed
         # (transformers logger usually handles printed logs)
 
@@ -283,15 +351,18 @@ def main():
     args = parser.parse_args()
 
     # --- Load Model ---
-    MAX_SEQ_LENGTH = 32768 # Adjust based on GPU memory
+    MAX_SEQ_LENGTH = 16384 # Adjust based on GPU memory
     print(f"Loading {args.model_name}...")
+    print(f"output dir: {args.output_dir}")
+
     
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name = args.model_name,
         max_seq_length = MAX_SEQ_LENGTH,
         dtype = None,
-        load_in_4bit = False,
-        device_map = {"": 0} 
+        load_in_4bit = True, # False
+        device_map = 'auto',
+        # {"": 0,} 
     )
 
     # --- LoRA Config ---
@@ -320,16 +391,35 @@ def main():
                 -Final answer: \\boxed{{...}}  (last line only)"""
 
     # --- Prepare Data ---
-    def formatting_prompts_func(examples, problem_field="prompt", solution_field="solution"):
+    def formatting_prompts_func(examples, problem_field="problem", solution_field="solution", think_field = 'think' ):
         prompts = examples[problem_field] # problem
         responses = examples[solution_field]
+        thinks = examples[think_field] if think_field in examples else ["" for _ in prompts]
         texts = []
-        for p, r in zip(prompts, responses):
+        for p, r, t in zip(prompts, responses, thinks):
+            # remove ... (last line only) from p
+            delimiter = "Problem:"
+            # "Output format:\n-Steps: (multiple lines)\n-Final answer: \\boxed{...}  (last line only)\n\n"
+
+            if delimiter in p:
+                # split()[1] takes everything AFTER the delimiter
+                output_str = p.split(delimiter)[1]
+                # print("Delimiter found. Extracted relevant part of the string.")
+            else:
+                output_str = p
+                print("Delimiter not found. Returning original string.")
+            extracted_problem = output_str.strip()
+            # assistant_content = str(r)
+            # think_start_idx = r.find("analysis") + 8
+            # think_end_idx = r.find("assistantfinal")
+            assistant_content = r
+            # 'analysis '+ str(t) + ' assistantfinal' + str(r)
             messages = [
-                {"role": "user", "content": str(p)},
-                {"role": "assistant", "content": '<think> </think>' + str(r)}
+                {"role": "system", "content": training_prompt},
+                {"role": "user", "content": extracted_problem},
+                {"role": "assistant", "content": assistant_content} # '<think> </think>' + 
             ]
-            text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False, enable_thinking = False)
+            text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False, reasoning_effort='low') # ,  enable_thinking = False
             texts.append(text)
         return { "text" : texts }
 
@@ -339,10 +429,11 @@ def main():
         texts = []
         for p, r in zip(prompts, responses):
             messages = [
+                {"role": 'system', "content": training_prompt},
                 {"role": "user", "content": str(p)},
-                {"role": "assistant", "content": '<think> </think>' + str(r)}
+                {"role": "assistant", "content":  str(r)} # '<think> </think>' +
             ]
-            text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False, enable_thinking = False)
+            text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False, reasoning_effort='low') #  enable_thinking = False, 
             texts.append(text)
         return { "text" : texts }
 
@@ -352,6 +443,8 @@ def main():
     if args.train_subset:
         train_dataset = train_dataset.select(range(min(len(train_dataset), args.train_subset)))
     train_dataset = train_dataset.map(formatting_prompts_func, batched=True)
+
+    print("Training dataset size:", len(train_dataset))
 
     # Load Evaluation Data
     print(f"Loading evaluation data: {args.eval_file}")
@@ -387,7 +480,7 @@ def main():
             gradient_accumulation_steps = 1,
             warmup_ratio = 0.03,
             # max_steps = args.max_steps,
-            num_train_epochs = 5,
+            num_train_epochs = args.max_train_epochs,
             learning_rate = args.learning_rate, # 5e-6
             fp16 = False,
             bf16 = True, # True
@@ -407,6 +500,8 @@ def main():
             save_total_limit = args.save_limit, 
             
             seed = 3407,
+
+            ddp_find_unused_parameters=False, 
         ),
         # Add the custom callback here
         callbacks=[eval_callback],
@@ -415,6 +510,16 @@ def main():
 
     # --- Run ---
     print("Starting Training...")
+    # 
+    # trainer.state.epoch = 0
+    # MathEvalCallback.on_evaluate(
+    #     eval_callback,
+    #     trainer.args,
+    #     trainer.state,
+    #     None,
+    #     trainer.model
+    # )
+
     trainer.train()
 
     print(f"Saving final model to {args.output_dir}")

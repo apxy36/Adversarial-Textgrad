@@ -4,7 +4,7 @@ from init import *
     # Make a request to the chat completions endpoint
 response = client.chat.completions.create(
     # Specify the model to use, for example, "gpt-4o" or "gpt-3.5-turbo"
-    model="gpt-4o", 
+    model="gpt-5.2-2025-12-11", 
     
     # The 'messages' parameter is a list of message objects,
     # where each object has a 'role' and 'content'.
